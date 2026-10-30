@@ -1,0 +1,17 @@
+# Blue Origin backend
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9      # file uploads
+pandas>=2.2
+numpy>=1.26
+openpyxl>=3.1                # .xlsx (reading)
+xlsxwriter>=3.2              # .xlsx downloads in the TechnoSport report format
+xlrd>=2.0                    # legacy .xls (optional - remove if .xls is never used)
+dropbox>=12.0                # Dropbox is the data store
+rapidfuzz>=3.0               # bo_pipeline.py: duplicate retailer matching
+
+# testing
+pytest>=8.0
+httpx>=0.27                  # FastAPI TestClient

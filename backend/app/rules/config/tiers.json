@@ -1,0 +1,78 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for tier thresholds. Aligned with the BO Power BI tier computation (Computed_Tier in /Power BI/BO_Dashboard/retailer_quarter.csv): quarterly revenue, Yellow 50k-1.5L, Green 1.5L-3L, Silver 3L-5L, Gold 5L-10L, Platinum above 10L; an amount on a boundary belongs to the higher tier. Until Q1 FY 27 (quarters before July 2026) Green was 1.5L-2.5L and Silver 2.5L-5L (see 'earlier').",
+  "status": "aligned_with_bo_tier_scheme",
+  "currency": "INR",
+  "qualification_basis": "quarterly_net_sales",
+  "qualification_basis_note": "Tiers are qualified on sales in the selected eligible reporting period (default: quarter), not lifetime sales. Whether 'sales' means gross, net of returns, or billed value is NOT confirmed.",
+  "boundary_rule": "lower_inclusive",
+  "effective_from_note": "A tier with effective_from only applies to quarters starting on or after that date. Platinum starts in Q1 FY 27 (April 2026); earlier quarters top out at Gold, which then has no upper limit.",
+  "boundary_rule_note": "lower_inclusive: min <= x < max (150000 is Green, 500000 is Gold), as in the BO Power BI computed tiers. Allowed: lower_inclusive, upper_inclusive, unconfirmed.",
+  "below_minimum_label": null,
+  "below_minimum_note": "Treatment of retailers below the lowest threshold is not confirmed; they are returned with tier = null.",
+  "unranked": {
+    "name": "Unranked",
+    "color": "#94a3b8",
+    "description": "Below Rs 50,000 in the quarter (Untiered)"
+  },
+  "tiers": [
+    {
+      "code": "YELLOW",
+      "name": "Yellow",
+      "rank": 1,
+      "min_amount": 50000,
+      "max_amount": 150000,
+      "color": "#eab308",
+      "description": "Entry tier for emerging retailers"
+    },
+    {
+      "code": "GREEN",
+      "name": "Green",
+      "rank": 2,
+      "min_amount": 150000,
+      "max_amount": 300000,
+      "color": "#22c55e",
+      "description": "Growing retailers with steady offtake",
+      "earlier": [
+        {
+          "before": "2026-07-01",
+          "max_amount": 250000
+        }
+      ]
+    },
+    {
+      "code": "SILVER",
+      "name": "Silver",
+      "rank": 3,
+      "min_amount": 300000,
+      "max_amount": 500000,
+      "color": "#64748b",
+      "description": "Established retailers",
+      "earlier": [
+        {
+          "before": "2026-07-01",
+          "min_amount": 250000
+        }
+      ]
+    },
+    {
+      "code": "GOLD",
+      "name": "Gold",
+      "rank": 4,
+      "min_amount": 500000,
+      "max_amount": 1000000,
+      "color": "#d97706",
+      "description": "High-performing retailers"
+    },
+    {
+      "code": "PLATINUM",
+      "name": "Platinum",
+      "rank": 5,
+      "min_amount": 1000000,
+      "max_amount": null,
+      "effective_from": "2026-04-01",
+      "color": "#6366f1",
+      "description": "Top-performing strategic retailers"
+    }
+  ],
+  "earlier_note": "A tier's 'earlier' list holds amounts that applied to quarters starting before the given date: Silver started at 2.5L (Green ended at 2.5L) until Q1 FY 27; from Q2 FY 27 (July 2026) Silver is 3L-5L and Green 1.5L-3L."
+}

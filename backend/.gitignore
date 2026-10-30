@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.pytest_cache/
+# Local data store (DATA_SOURCE=local) - real BO data must never be committed
+app/data/
+# Google service-account key for the sheets download - never commit
+secrets/

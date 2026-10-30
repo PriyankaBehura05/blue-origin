@@ -1,0 +1,12 @@
+{
+  "bo_pipeline.py": {
+    "copy": "app/pipeline/bo_pipeline.py",
+    "copied": "2026-10-15",
+    "fingerprint": "dea027e70465019d"
+  },
+  "BO_data.ipynb": {
+    "copy": "app/pipeline/consolidated_prep.py (cleaning cells)",
+    "copied": "2026-10-15",
+    "fingerprint": "f94d7a9ccab586fd"
+  }
+}

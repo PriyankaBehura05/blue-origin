@@ -1,0 +1,19 @@
+{
+  "_comment": "Reference benefit categories. Entitlement quantities, frequencies and tier eligibility are NOT defined yet and must come from the business (Phase 6).",
+  "status": "categories_only_entitlements_unconfirmed",
+  "categories": [
+    {"code": "CARRY_BAGS",        "name": "Branded carry bags",                       "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "CERTIFICATE",       "name": "Retailer certificates",                    "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "OUTDOOR_BOARD",     "name": "Outdoor boards",                           "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "SIS_UNIT",          "name": "SIS units",                                "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "PRODUCT_VIDEO",     "name": "Product videos",                           "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "YOUTUBE_PROMO",     "name": "YouTube promotions",                       "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "GOOGLE_BUSINESS",   "name": "Google Business / Google My Business",     "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "INFLUENCER_SHOOT",  "name": "Influencer shoots",                        "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "LOCAL_ADS",         "name": "Local advertisements",                     "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "GOOGLE_MAPS_ADS",   "name": "Google Maps advertisements",               "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "VM_TRAINING",       "name": "Virtual merchandising training",           "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "GOODIE_BAGS",       "name": "Goodie bags",                              "eligible_tiers": null, "entitlement": null, "frequency": null},
+    {"code": "NEW_SAMPLES",       "name": "New product samples",                      "eligible_tiers": null, "entitlement": null, "frequency": null}
+  ]
+}
