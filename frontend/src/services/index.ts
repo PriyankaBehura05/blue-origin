@@ -1,5 +1,5 @@
 // Single entry point for data access. All data comes from the FastAPI backend (Dropbox-backed).
-// Configure the backend URL with VITE_API_BASE_URL (default: /api, proxied to :8000 by Vite in dev).
+// The backend URL comes from VITE_API_BASE_URL, set per mode in .env.development / .env.remote / .env.production.
 import type { ApiClient } from './api';
 import { httpApi } from './httpApi';
 

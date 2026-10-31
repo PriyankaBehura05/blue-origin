@@ -9,8 +9,15 @@ npm run dev        # http://localhost:5173  (start the backend on :8000 first)
 npm run build      # type-check + production build
 ```
 
-In development Vite proxies `/api` to `http://localhost:8000` (override with `VITE_PROXY_TARGET`).
-For a separately hosted backend set `VITE_API_BASE_URL=https://<host>/api` in `.env`.
+The backend URL is chosen by how the frontend is started:
+
+| Command | Env file | Backend |
+|---|---|---|
+| `npm run dev` | `.env.development` | local, `http://localhost:8000` |
+| `npm run dev:remote` | `.env.remote` | deployed, `https://blue-origin-2.onrender.com` |
+| `npm run build` | `.env.production` | deployed, `https://blue-origin-2.onrender.com` |
+
+To override one on your machine only, put the values in `.env.local` (not committed).
 
 ## Structure
 
