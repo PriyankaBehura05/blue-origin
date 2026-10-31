@@ -30,9 +30,12 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
     LOG_LEVEL: str = "INFO"
 
-    # ---- CORS (React / Vite dev server) ------------------------------------
+    # ---- CORS (deployed frontend + React / Vite dev server) ------------------
     # Comma-separated in .env, e.g. http://localhost:5173,http://127.0.0.1:5173
-    CORS_ORIGINS: Annotated[List[str], NoDecode] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # A CORS_ORIGINS value in the environment or .env replaces this whole list.
+    CORS_ORIGINS: Annotated[List[str], NoDecode] = [
+        "https://blue-originfrontend.vercel.app", "http://localhost:5173", "http://127.0.0.1:5173",
+    ]
 
     # ---- Data store -----------------------------------------------------------
     # "dropbox" -> Dropbox is the database (production / normal use)
