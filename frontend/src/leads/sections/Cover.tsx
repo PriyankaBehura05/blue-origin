@@ -3,7 +3,7 @@ import { ArrowRight, FileText, IndianRupee, Percent, Phone, Presentation, Refres
 import { Card, Delta, Kpi, NeedsData, Pct, Section, STROKE, inr, num, pctTxt, useLeads, type KpiProps } from '../ui';
 import { Donut, HBars, StackedBars } from '../charts';
 import { categoryColor, OUTCOME_COLORS, SECTIONS, SOURCE_COLORS } from '../sections';
-import { leadOk, monthName, NEW, PENDING, REACTIVATED, wasCalled, prevPeriod, rangeOf, ORGANIC, outcomeOf, LEVEL_NAMES, periodMonths, periodName, quarterName, rag, spendIn, wilson, type Filters, type Model, type Range } from '../model';
+import { leadOk, monthName, NEW, NOT_CONVERTED, PENDING, REACTIVATED, wasCalled, prevPeriod, rangeOf, ORGANIC, outcomeOf, LEVEL_NAMES, periodMonths, periodName, quarterName, rag, spendIn, wilson, type Filters, type Model, type Range } from '../model';
 import { leadStats, monthlySeries, newPerMonth, retailerStats, runRate } from '../calc';
 
 export interface Insight {
@@ -78,7 +78,7 @@ export function buildInsights(M: Model, c: ReturnType<typeof useCover>, f: Filte
   } else {
     const conv = L.judged ? (100 * L.out[NEW]) / L.judged : 0;
     out.push({ insight: conv >= t.conversion_pct ? 'More leads than planned are becoming retailers' : 'Too few leads are becoming retailers',
-      number: `${conv.toFixed(1)}% of ${num(L.judged)} leads became new retailers (target ${t.conversion_pct}%)${L.out[PENDING] ? `; ${num(L.out[PENDING])} newer leads are too new to tell` : ''}`,
+      number: `${conv.toFixed(1)}% of ${num(L.judged)} leads became new retailers (target ${t.conversion_pct}%)${L.out[PENDING] ? `; ${num(L.out[PENDING])} leads are pending sales data` : ''}`,
       action: conv >= t.conversion_pct ? 'Put more budget into the best campaigns' : 'Call every new lead within 2 days before spending more on ads',
       owner: 'Marketing Lead + RSMs' });
     // best and worst campaign by conversion (30+ valid unique leads)
@@ -119,7 +119,8 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
   const c = useCover();
   const insights = useMemo(() => buildInsights(M, c, f, rg), [M, c, f, rg]);
   const { L, Lp, S, Sp, t, scale, spend, spendP, rr } = c;
-  const conv = L.judged ? (100 * L.out[NEW]) / L.judged : null;
+  // no lead here can be judged new-or-not yet (only shops already buying are known): pending, not 0%
+  const conv = L.judged && (L.out[NEW] + L.out[NOT_CONVERTED] > 0 || !L.out[PENDING]) ? (100 * L.out[NEW]) / L.judged : null;
   const convP = Lp && Lp.judged ? (100 * Lp.out[NEW]) / Lp.judged : null;
   const ret = S.prevBilled ? (100 * S.retained) / S.prevBilled : null;
   const retP = Sp && Sp.prevBilled ? (100 * Sp.retained) / Sp.prevBilled : null;
@@ -136,10 +137,11 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
       rag: M.p.hasLeads ? rag(L.unique, t.unique_leads_quarter * scale) : 'none', ragNote: `Target ${num(t.unique_leads_quarter * scale)} for this period`,
       delta: <Delta cur={M.p.hasLeads ? L.unique : null} prev={Lp?.unique ?? null} />, spark: lastLead >= 0 ? tail(ser.leads, lastLead) : undefined,
       info: 'People who enquired, counted once per mobile number (their first enquiry). Trend: leads per month.' },
-    { icon: Percent, label: 'Leads that became retailers', value: conv !== null ? <Pct k={L.out[NEW]} n={L.judged} label="New retailers ÷ leads old enough to tell" /> : '—',
-      sub: conv !== null ? `${num(L.out[NEW])} of ${num(L.judged)} leads${ci ? ` · likely ${(100 * ci[0]).toFixed(1)}–${(100 * ci[1]).toFixed(1)}%` : ''}` : 'Needs leads',
+    { icon: Percent, label: 'Leads that became retailers', value: conv !== null ? <Pct k={L.out[NEW]} n={L.judged} label="New retailers ÷ leads with sales data" /> : L.out[PENDING] ? 'Pending sales data' : '—',
+      sub: conv !== null ? `${num(L.out[NEW])} of ${num(L.judged)} leads${ci ? ` · likely ${(100 * ci[0]).toFixed(1)}–${(100 * ci[1]).toFixed(1)}%` : ''}${L.out[PENDING] ? ` · ${num(L.out[PENDING])} pending` : ''}`
+        : L.out[PENDING] ? `${num(L.out[PENDING])} leads wait for sales after ${monthName(M, M.p.salesEnd)}` : 'Needs leads',
       rag: rag(conv, t.conversion_pct), ragNote: `Target ${t.conversion_pct}%`, delta: <Delta cur={conv} prev={convP} asPoints />,
-      info: `A lead counts as a new retailer when its shop places its first-ever order (BO billing) within ${f.window} days. Leads too new to tell are left out until the sales data catches up.` },
+      info: `A lead counts as a new retailer when its shop places its first-ever order (BO billing) within ${f.window} days. Leads pending sales data are left out (not counted as no sale) until the sales data catches up.` },
     { icon: Store, label: 'New retailers', value: num(S.newAll), sub: <>{num(S.newMkt)} came from leads (<Pct k={S.newMkt} n={S.newAll} label="From leads ÷ all new retailers" />)</>,
       rag: rag(S.newAll, t.new_retailers_quarter * scale), ragNote: `Target ${num(t.new_retailers_quarter * scale)} for this period`, delta: <Delta cur={S.newAll} prev={Sp?.newAll ?? null} />,
       spark: tail(c.npm.all, M.p.salesEnd), info: 'Shops that placed their first-ever order in this period (BO billing). Trend: new retailers per month.' },
@@ -227,7 +229,7 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
               series={srcIdx.map((j) => ({ key: `s${j}`, label: M.p.dims.source[j], color: SOURCE_COLORS[j] }))} />
           </Card>
           <Card title="What happened to the leads" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
-            info={{ what: <>Each lead, checked against BO billing: <b>New retailer</b> = first-ever order within {f.window} days; <b>Came back</b> = an old retailer who had stopped and ordered again; <b>Already buying</b> = was ordering anyway; <b>No sale yet</b>; <b>Invalid number</b>; <b>Too new to tell</b> = the sales data does not reach that far yet.</>, source: 'Lead sheets matched to BO sales' }}
+            info={{ what: <>Each lead, checked against BO billing: <b>New retailer</b> = first-ever order within {f.window} days; <b>Came back</b> = an old retailer who had stopped and ordered again; <b>Already buying</b> = was ordering anyway; <b>No sale yet</b>; <b>Invalid number</b>; <b>Pending sales data</b> = the sales data does not reach that far yet, so it is not counted as no sale.</>, source: 'Lead sheets matched to BO sales' }}
             soWhat={L.unique ? <>{num(L.out[NEW])} leads became new retailers and {num(L.out[REACTIVATED])} old retailers came back.</> : undefined}>
             <Donut data={outcomes} fmt={num} center={<><b>{num(L.unique)}</b><span>leads</span></>} />
           </Card>
@@ -251,11 +253,11 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
               center={<><b>{num(L.unique)}</b><span>leads</span></>} />
           </Card>
           <Card title="Which source brings retailers" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
-            info={{ what: `Share of each source\'s leads that became new retailers (first order within ${f.window} days). Leads too new to tell are left out.`, formula: 'new retailers ÷ leads old enough to tell' }}
-            soWhat={views.sources.some((e) => e.judged < 30) ? <>Sources with under 30 leads old enough to tell are too small to compare yet.</> : undefined}>
+            info={{ what: `Share of each source\'s leads that became new retailers (first order within ${f.window} days). Leads pending sales data are left out.`, formula: 'new retailers ÷ leads with sales data' }}
+            soWhat={views.sources.some((e) => e.judged < 30) ? <>Sources with under 30 leads with sales data are too small to compare yet.</> : undefined}>
             <HBars fmt={(v) => `${v.toFixed(1)}%`} max={Math.max(1, ...views.sources.map((e) => (e.judged ? (100 * e.k) / e.judged : 0)))}
               rows={views.sources.map((e) => ({ key: String(e.j), label: M.p.dims.source[e.j], value: e.judged ? (100 * e.k) / e.judged : 0, color: SOURCE_COLORS[e.j],
-                note: e.judged ? `${num(e.k)} of ${num(e.judged)}` : 'too new to tell' }))} />
+                note: e.judged ? `${num(e.k)} of ${num(e.judged)}` : 'pending sales data' }))} />
           </Card>
           <Card title="Key findings" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
             info={{ what: 'Up to 5 findings for the filters above: what we see, the number behind it, what to do and who does it. "+ Action" adds one to the action list.' }}>

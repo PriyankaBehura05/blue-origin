@@ -7,7 +7,7 @@ import { CalendarClock, Filter, RotateCcw, SlidersHorizontal } from 'lucide-reac
 import { ErrorBox, Loading } from '@/components/ui';
 import { useSession } from '@/services/session';
 import { leadsApi } from './api';
-import { buildModel, defaultFilters, LEVEL_HELP, LEVEL_NAMES, monthName, ORGANIC, periodName, quarterName, rangeOf, type Filters, type Model } from './model';
+import { buildModel, dayName, defaultFilters, leadQuarters, LEVEL_HELP, LEVEL_NAMES, monthName, ORGANIC, outcomeOf, partialNote, PENDING, periodName, quarterName, quarterShort, rangeOf, type Filters, type Model } from './model';
 import { LeadsCtx, STROKE, makeCtx } from './ui';
 import { SECTIONS, SOURCE_NAMES } from './sections';
 import type { ActionItem, LeadsPayload, LeadsStatus } from './types';
@@ -146,7 +146,7 @@ function Dashboard(props: {
       <div className="ld">
         <FilterBar M={M} f={f} set={set} reset={() => setF({ ...defaultFilters(M), level: f.level, window: f.window })} />
         <main className="ld-main">
-          <NewerLeads M={M} f={f} set={set} />
+          <PeriodNote M={M} f={f} set={set} />
           {view[props.page]()}
         </main>
       </div>
@@ -154,27 +154,38 @@ function Dashboard(props: {
   );
 }
 
-/** Leads newer than the chosen period (typically: the sales data ends before the latest leads): say so, one click away. */
-function NewerLeads({ M, f, set }: { M: Model; f: Filters; set: (p: Partial<Filters>) => void }) {
+/** Leads and sales run on their own dates: say which leads sit outside the chosen period, and which ones the sales
+ *  data does not reach yet (Pending sales data, never counted as not converted). Both fill in on their own. */
+function PeriodNote({ M, f, set }: { M: Model; f: Filters; set: (p: Partial<Filters>) => void }) {
   const L = M.p.leads;
-  const end = rangeOf(M, f.period)[1];
-  let n = 0;
-  let last = -1;
+  const [a, b] = rangeOf(M, f.period);
+  let newer = 0;
+  let pending = 0;
+  let known = 0;
   for (let i = 0; i < M.nL; i++) {
     if (!L.uniq[i]) continue;
-    if (L.m[i] > end) n++;
-    if (L.m[i] > last) last = L.m[i];
+    if (L.m[i] > b) newer++;
+    else if (L.m[i] >= a && L.valid[i]) {
+      if (outcomeOf(M, i, f.level, f.window) === PENDING) pending++;
+      else known++;
+    }
   }
-  if (!n || last < 0) return null;
-  const q = M.p.monthQuarter[last];
+  if (!newer && !pending) return null;
+  const sales = monthName(M, M.p.salesEnd);
+  const q = M.p.monthQuarter[M.leadEnd];
   return (
     <div className="ld-banner" role="status">
       <CalendarClock size={16} strokeWidth={STROKE} aria-hidden />
       <span>
-        You are looking at <b>{periodName(M, f.period)}</b>. <b>{n.toLocaleString('en-IN')}</b> more leads came in after that (up to {monthName(M, last)}).
-        {last > M.p.salesEnd && <> Sales are only available up to {monthName(M, M.p.salesEnd)}, so for those newer leads we can't tell yet who became a retailer.</>}
+        {newer > 0 && <><b>{newer.toLocaleString('en-IN')}</b> newer leads (up to {monthName(M, M.leadEnd)}) are outside <b>{periodName(M, f.period)}</b>. </>}
+        {pending > 0 && <><b>{pending.toLocaleString('en-IN')}</b> leads here are <b>Pending sales data</b>: sales only run to {sales}, so we can't tell yet if they became retailers.
+          They are not counted as "No sale yet", and the conversion % uses the {known.toLocaleString('en-IN')} leads whose sales are known. </>}
+        {pending > 0 && 'This fills in by itself when new sales data arrives.'}
       </span>
-      <button type="button" className="ld-btn" onClick={() => set({ period: `q:${q}` })}>See the newer leads</button>
+      {newer > 0 && <>
+        <button type="button" className="ld-btn" onClick={() => set({ period: `q:${q}` })}>See {quarterShort(q)} leads</button>
+        <button type="button" className="ld-btn" onClick={() => set({ period: 'all' })}>All periods</button>
+      </>}
     </div>
   );
 }
@@ -191,7 +202,7 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
   }, [M, f.state, d.city]);
   const sorted = <T extends { c: string }>(a: T[]) => [...a].sort((x, y) => x.c.localeCompare(y.c));
   const idx = (a: string[]) => sorted(a.map((c, i) => ({ c, i })).filter((x) => x.c));
-  const months = M.p.months.map((_, i) => i).reverse();
+  const months = M.p.months.map((_, i) => i).filter((i) => i >= M.leadStart && i <= M.leadEnd).reverse();
 
   const ADV: (keyof Filters)[] = ['campaign', 'tier', 'outcome', 'level', 'window'];
   const sel = (key: keyof Filters, label: string, options: { v: number | string; l: string }[], opt = true, allLabel?: string) => (
@@ -203,9 +214,9 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
   );
 
   const periodOpts = [
-    ...[...M.p.quarters].reverse().map((q) => ({ v: `q:${q}`, l: quarterName(q) })),
-    ...months.map((m) => ({ v: `m:${m}`, l: monthName(M, m) })),
-    { v: 'all', l: 'All periods' },
+    ...leadQuarters(M).map((q) => ({ v: `q:${q}`, l: quarterName(q) + partialNote(M, `q:${q}`) })),
+    { v: 'all', l: periodName(M, 'all') },
+    ...months.map((m) => ({ v: `m:${m}`, l: `Month: ${monthName(M, m)}` })),
   ];
   return (
     <div className={`ld-filters${more ? ' expanded' : ''}`} role="search" aria-label="Global filters">
@@ -223,7 +234,9 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
       <button type="button" className="ld-reset ld-filter-more" onClick={() => setMore((x) => !x)} aria-expanded={more}
         title={LEVEL_HELP.join(' · ')}><SlidersHorizontal size={13} strokeWidth={STROKE} />{more ? 'Fewer filters' : 'More filters'}</button>
       <button type="button" className="ld-reset" onClick={reset} title="Clear filters"><RotateCcw size={13} strokeWidth={STROKE} />Reset</button>
-      <span className="ld-window">Showing: <b>{periodName(M, f.period)}</b></span>
+      <span className="ld-window">Showing: <b>{periodName(M, f.period)}</b>
+        <span className="ld-cover" title="Leads and sales update on their own; each new sales month fills in the pending results.">
+          Leads up to {M.leadLastDay >= 0 ? dayName(M.leadLastDay) : '—'} · Sales up to {monthName(M, M.p.salesEnd)}</span></span>
     </div>
   );
 }

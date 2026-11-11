@@ -50,7 +50,10 @@ export interface Model {
   asOfDay: number;
   ret: number[][]; // matched retailer per level
   acqCache: Map<string, { lead: Int32Array; src: Int8Array }>;
-  latestQuarter: string; // latest quarter with sales
+  latestQuarter: string; // latest quarter whose sales data is complete (the default view)
+  leadStart: number; // first and last month with leads; 'All periods' spans these (sales run independently)
+  leadEnd: number;
+  leadLastDay: number; // newest lead date, days since 1970-01-01 (-1 = no leads)
 }
 
 export function buildModel(p: LeadsPayload): Model {
@@ -63,12 +66,27 @@ export function buildModel(p: LeadsPayload): Model {
   p.monthQuarter.forEach((q, i) => (qMonths[q] ??= []).push(i));
   const tierQ: Record<string, number> = {};
   p.tierQuarters.forEach((q, i) => (tierQ[q] = i));
+  let leadStart = nM;
+  let leadEnd = -1;
+  let leadLastDay = -1;
+  p.leads.m.forEach((m, i) => {
+    if (m < leadStart) leadStart = m;
+    if (m > leadEnd) leadEnd = m;
+    if (p.leads.day[i] > leadLastDay) leadLastDay = p.leads.day[i];
+  });
+  if (leadEnd < 0) [leadStart, leadEnd] = [0, nM - 1];
+  // default: the latest quarter whose last month has sales data, so its conversion figures are final
+  const complete = p.quarters.filter((q) => {
+    const ms = qMonths[q] ?? [];
+    return ms.length && ms[ms.length - 1] <= p.salesEnd && ms[ms.length - 1] >= leadStart;
+  });
   return {
     p, nR, nM, nL: p.leads.day.length, rev, qMonths, tierQ,
     asOfDay: Math.floor(Date.parse(p.asOf + 'T00:00:00Z') / 86400000),
     ret: [p.leads.rf, p.leads.rl, p.leads.rc],
     acqCache: new Map(),
-    latestQuarter: p.monthQuarter[p.salesEnd],
+    latestQuarter: complete[complete.length - 1] ?? p.monthQuarter[p.salesEnd],
+    leadStart, leadEnd, leadLastDay,
   };
 }
 
@@ -86,14 +104,30 @@ export type Range = [number, number];
 export function rangeOf(M: Model, period: string): Range {
   if (period.startsWith('q:')) {
     const ms = M.qMonths[period.slice(2)] ?? [];
-    return ms.length ? [ms[0], ms[ms.length - 1]] : [0, M.nM - 1];
+    return ms.length ? [ms[0], ms[ms.length - 1]] : [M.leadStart, M.leadEnd];
   }
   if (period.startsWith('m:')) {
     const i = Number(period.slice(2));
     return [i, i];
   }
-  return [0, M.nM - 1];
+  return [M.leadStart, M.leadEnd]; // all periods = every month with leads
 }
+
+/** Quarters that hold leads, oldest first. */
+export const leadQuarters = (M: Model) =>
+  M.p.quarters.filter((q) => (M.qMonths[q] ?? []).some((m) => m >= M.leadStart && m <= M.leadEnd));
+
+/** Months of the period that the lead or sales data has not reached yet ('Oct–Nov so far'). */
+export function partialNote(M: Model, period: string): string {
+  if (!period.startsWith('q:')) return '';
+  const ms = M.qMonths[period.slice(2)] ?? [];
+  if (!ms.length || ms[ms.length - 1] <= M.leadEnd) return '';
+  const have = ms.filter((m) => m <= M.leadEnd);
+  return have.length ? ` · ${have.map((m) => monthName(M, m).slice(0, 3)).join('–')} so far` : '';
+}
+
+export const dayName = (d: number) =>
+  new Date(d * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 export function prevPeriod(M: Model, period: string): string | null {
   if (period.startsWith('q:')) {
@@ -125,7 +159,7 @@ export const quarterShort = (q: string) => q.replace(/^Q(\d)_FY(\d+)$/, 'Q$1 FY$
 export function periodName(M: Model, period: string): string {
   if (period.startsWith('q:')) return quarterName(period.slice(2));
   if (period.startsWith('m:')) return monthName(M, Number(period.slice(2)));
-  return `All (${monthName(M, 0)} – ${monthName(M, M.nM - 1)})`;
+  return `All periods (${monthName(M, M.leadStart)} – ${monthName(M, M.leadEnd)})`;
 }
 
 // ---- retailers -----------------------------------------------------------------------------------------------------

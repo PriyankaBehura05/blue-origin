@@ -119,7 +119,7 @@ export default function Field() {
     { key: 'vis', label: 'Visited', num: true, render: (r) => <Pct k={r.visited} n={r.assigned} label="Visited ÷ assigned" />, sort: (r) => (r.assigned ? r.visited / r.assigned : 0), csv: (r) => r.visited },
     { key: 'clm', label: 'Orders reported', num: true, render: (r) => num(r.claimed), sort: (r) => r.claimed },
     { key: 'clv', label: 'Order value reported', num: true, render: (r) => inr(r.claimedValue), sort: (r) => r.claimedValue },
-    { key: 'bo', label: 'Order confirmed in BO', num: true, render: (r) => <Pct k={r.boBilled} n={r.boBilled + r.boNotBilled} label="Reported orders whose retailer billed in BO within 3 months ÷ reported orders old enough to check" />, sort: (r) => (r.boBilled + r.boNotBilled ? r.boBilled / (r.boBilled + r.boNotBilled) : -1), csv: (r) => r.boBilled },
+    { key: 'bo', label: 'Order confirmed in BO', num: true, render: (r) => <Pct k={r.boBilled} n={r.boBilled + r.boNotBilled} label="Reported orders whose retailer billed in BO within 3 months ÷ reported orders with sales data" />, sort: (r) => (r.boBilled + r.boNotBilled ? r.boBilled / (r.boBilled + r.boNotBilled) : -1), csv: (r) => r.boBilled },
     { key: 'conv', label: 'New retailers', num: true, render: (r) => <Pct k={r.converted} n={r.assigned} label="New retailers (BO first bill in the window) ÷ assigned" />, sort: (r) => (r.assigned ? r.converted / r.assigned : 0), csv: (r) => r.converted },
     ...(M.p.hasContactDates ? [
       { key: 'med', label: 'Median days to contact', num: true, render: (r: OwnerRow) => (r.days.length ? median(r.days).toFixed(0) : '—'), sort: (r: OwnerRow) => (r.days.length ? median(r.days) : 999) },
@@ -145,7 +145,7 @@ export default function Field() {
   const orderRows = [
     { k: 'Reported, and the retailer billed in BO', n: orders.billed, v: orders.value[0] },
     { k: 'Reported, no BO billing within 3 months', n: orders.notBilled, v: orders.value[1] },
-    { k: 'Reported, too recent to check', n: orders.pending, v: orders.value[2] },
+    { k: 'Reported, pending sales data', n: orders.pending, v: orders.value[2] },
     { k: 'Not reported, but a new retailer billed in BO', n: orders.billedUnreported, v: 0 },
   ];
 
@@ -168,12 +168,12 @@ export default function Field() {
           )}
         </Card>
         <Card title="ASM leaderboard" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
-          info={{ what: 'Leads each ASM owns (ASM NAME on the lead sheet, or the follow-up log): called, visited, orders they report and how many of those the BO billing confirms (the matched retailer billed within 3 months of the lead), and new retailers per BO first bills. Leads not called after the SLA are counted from the lead date.', formula: 'Seen in BO billing = reported orders whose retailer billed ÷ reported orders old enough to check', source: 'Lead sheet ASM columns / follow-up log, matched to BO retailer_month.csv' }}
+          info={{ what: 'Leads each ASM owns (ASM NAME on the lead sheet, or the follow-up log): called, visited, orders they report and how many of those the BO billing confirms (the matched retailer billed within 3 months of the lead), and new retailers per BO first bills. Leads not called after the SLA are counted from the lead date.', formula: 'Seen in BO billing = reported orders whose retailer billed ÷ reported orders with sales data', source: 'Lead sheet ASM columns / follow-up log, matched to BO retailer_month.csv' }}
           csv={{ name: 'field_leaderboard', rows: () => csvRows(owners, ocols) }}>
           {!M.p.hasFollowup ? <NeedsData what="followup" /> : <Table rows={owners} cols={ocols} initialSort={{ key: 'asg', dir: 'desc' }} />}
         </Card>
         <Card title="Reported orders vs BO billing" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level']}
-          info={{ what: 'Every order an ASM marked "Order placed", checked against the BO sales data: did the lead\'s matched retailer bill in the lead month or the 2 months after? The last line counts leads marked "no order" that still became new retailers in BO. Nothing is changed in the BO data: it is only read.', formula: 'retailer billed in BO in months L..L+2 (L = lead month); too recent = L+2 after the last sales month', source: 'Lead sheet Order Placed / Order Value + BO retailer_month.csv' }}
+          info={{ what: 'Every order an ASM marked "Order placed", checked against the BO sales data: did the lead\'s matched retailer bill in the lead month or the 2 months after? The last line counts leads marked "no order" that still became new retailers in BO. Nothing is changed in the BO data: it is only read.', formula: 'retailer billed in BO in months L..L+2 (L = lead month); pending sales data = L+2 after the last sales month', source: 'Lead sheet Order Placed / Order Value + BO retailer_month.csv' }}
           csv={{ name: 'orders_vs_bo', rows: () => orderRows.map((r) => ({ Check: r.k, Leads: r.n, 'Reported value (₹)': r.v })) }}
           soWhat={orders.billed + orders.notBilled ? <>{num(orders.billed)} of {num(orders.billed + orders.notBilled)} reported orders that can be checked show up in BO billing. The rest: the shop may bill under another name or number, or the order never reached a distributor.</> : undefined}>
           {!M.p.hasFollowup ? <NeedsData what="followup" /> : (

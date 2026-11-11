@@ -63,7 +63,7 @@ export default function Geography() {
     ...(M.p.hasLeads ? [
       { key: 'leads', label: 'Unique leads', num: true, render: (r: Agg) => <span className="ld-heat-c" style={{ ...heat(r.leads / maxLeads), padding: '1px 6px', borderRadius: 4 }}>{num(r.leads)}</span>, sort: (r: Agg) => r.leads, csv: (r: Agg) => r.leads },
       { key: 'conv', label: 'Converted', num: true, render: (r: Agg) => num(r.conv), sort: (r: Agg) => r.conv },
-      { key: 'rate', label: 'Conv. %', num: true, render: (r: Agg) => <Pct k={r.conv} n={r.valid} label="Converted ÷ valid unique leads old enough to judge" />, sort: (r: Agg) => (r.valid ? r.conv / r.valid : 0), csv: (r: Agg) => (r.valid ? ((100 * r.conv) / r.valid).toFixed(2) : '') },
+      { key: 'rate', label: 'Conv. %', num: true, render: (r: Agg) => <Pct k={r.conv} n={r.valid} label="Converted ÷ valid unique leads with sales data (pending left out)" />, sort: (r: Agg) => (r.valid ? r.conv / r.valid : 0), csv: (r: Agg) => (r.valid ? ((100 * r.conv) / r.valid).toFixed(2) : '') },
     ] : []),
     { key: 'ret', label: 'Retailers billed', num: true, render: (r) => <span style={{ ...heat(r.retailers / maxRet), padding: '1px 6px', borderRadius: 4 }}>{num(r.retailers)}</span>, sort: (r) => r.retailers, csv: (r) => r.retailers },
     { key: 'fresh', label: 'New retailers', num: true, render: (r) => num(r.fresh), sort: (r) => r.fresh },

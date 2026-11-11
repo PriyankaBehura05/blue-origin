@@ -23,7 +23,7 @@ from .normalise import month_int
 
 # shown on the dashboard as written: plain words (Existing active, Reactivated, New -> converted, Not converted,
 # Unmatchable, Too recent to judge)
-OUTCOMES = ["Already buying", "Came back", "New retailer", "No sale yet", "Invalid number", "Too new to tell"]
+OUTCOMES = ["Already buying", "Came back", "New retailer", "No sale yet", "Invalid number", "Pending sales data"]
 EXISTING, REACTIVATED, NEW, NOT_CONVERTED, UNMATCHABLE, PENDING = range(6)
 WINDOWS = (30, 60, 90)
 

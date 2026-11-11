@@ -61,8 +61,8 @@ def write_memo(sh: dict, lh: Optional[dict], gaps: List[str], payload: dict, tod
                      f"retailers at **{lh['conversion_pct']:.1f}%** (likely match, 60-day window; range {lo:.1f}%–{hi:.1f}% "
                      f"from strict to generous matching) against a {tgt['conversion_pct']:.0f}% target"
                      f"{target_note('conversion_pct')}."
-                     + (f" Another {lh['pending']:,} leads are too recent to judge: their 60 days run past the last month "
-                        "of sales data." if lh["pending"] else ""))
+                     + (f" Another {lh['pending']:,} leads are marked Pending sales data: their 60 days run past the last month "
+                        "of sales data, so they are not counted as not converted." if lh["pending"] else ""))
     else:
         lines.append("**The question 'is paid lead gen working?' cannot be answered yet: no lead files have been loaded.** "
                      "The network itself is measurable today, and the findings below come from the sales data alone.")

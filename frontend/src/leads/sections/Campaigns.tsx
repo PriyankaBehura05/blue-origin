@@ -86,7 +86,7 @@ export default function Campaigns() {
     ...(hasSpend ? [{ key: 'cpl', label: 'CPL', num: true, render: (r: Row) => (r.rows ? inr(r.spend / r.rows) : '—'), sort: (r: Row) => (r.rows ? r.spend / r.rows : 0) }] : []),
     { key: 'rep', label: 'Repeat %', num: true, render: (r) => <Pct k={r.rows - r.unique} n={r.rows} label="Repeat rows ÷ rows" ci={false} />, sort: (r) => (r.rows ? (r.rows - r.unique) / r.rows : 0) },
     { key: 'conv', label: 'Converted', num: true, render: (r) => num(r.conv), sort: (r) => r.conv },
-    { key: 'rate', label: 'Conv. %', num: true, render: (r) => <Pct k={r.conv} n={r.valid} label="Converted ÷ valid unique leads old enough to judge" />, sort: (r) => (r.valid ? r.conv / r.valid : 0), csv: (r) => (r.valid ? ((100 * r.conv) / r.valid).toFixed(2) : '') },
+    { key: 'rate', label: 'Conv. %', num: true, render: (r) => <Pct k={r.conv} n={r.valid} label="Converted ÷ valid unique leads with sales data (pending left out)" />, sort: (r) => (r.valid ? r.conv / r.valid : 0), csv: (r) => (r.valid ? ((100 * r.conv) / r.valid).toFixed(2) : '') },
     ...(hasSpend ? [{ key: 'cpr', label: 'Cost / converted', num: true, render: (r: Row) => (r.conv ? inr(r.spend / r.conv) : '—'), sort: (r: Row) => (r.conv ? r.spend / r.conv : Infinity) }] : []),
     { key: 'rev90', label: '90-day revenue', num: true, render: (r) => inr(r.rev90), sort: (r) => r.rev90 },
     ...(hasSpend ? [

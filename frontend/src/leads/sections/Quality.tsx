@@ -20,7 +20,7 @@ const GLOSSARY: [string, string][] = [
   ['New retailer', 'The shop\'s first-ever order (BO billing) comes within the chosen days after the enquiry (sale within 30, 60 or 90 days).'],
   ['Came back', 'An old retailer who had not ordered for 3 months before the enquiry and ordered again within the chosen days.'],
   ['Already buying', 'The shop had ordered in the 3 months before the enquiry: the lead did not bring it in.'],
-  ['Too new to tell', 'The chosen days after the enquiry run past the last month of sales data. These leads are left out of the % until the sales data is updated.'],
+  ['Pending sales data', 'The chosen days after the enquiry run past the last month of sales data, so we cannot tell yet if the lead became a retailer. These leads are not counted as "No sale yet" and are left out of the %. They update by themselves when new sales data arrives.'],
   ['Not from a lead (Organic)', 'A new retailer no lead brought in: found by a distributor, an ASM or by word of mouth (the data cannot tell them apart).'],
   ['Health', 'At the period end: Active = billed in the last 2 months; At-risk = last bill 2 months before (45–90 days); Churned = 3+ months.'],
   ['Retention (repeat)', 'Retailers billed in the previous period who billed again ÷ retailers billed in the previous period.'],
@@ -273,7 +273,7 @@ export default function Quality({ status, busy, onUpload, onDelete, onRebuild, o
           )}
         </Card>
         <Card title="How the % changes with the settings" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier']}
-          info={{ what: 'Share of leads that became new retailers for each matching setting and number of days. The spread from Strict to Loose shows how much the result depends on matching leads to shops.', formula: 'new retailers ÷ leads with a working number, old enough to tell' }}>
+          info={{ what: 'Share of leads that became new retailers for each matching setting and number of days. The spread from Strict to Loose shows how much the result depends on matching leads to shops.', formula: 'new retailers ÷ leads with a working number and sales data' }}>
           {!M.p.hasLeads ? <NeedsData what="leads" /> : (
             <table className="ld-table">
               <thead><tr><th>Matching</th>{M.p.dims.windows.map((w) => <th key={w} className="num">Sale within {w} days</th>)}</tr></thead>

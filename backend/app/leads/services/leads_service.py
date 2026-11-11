@@ -32,7 +32,7 @@ from . import sheets_source as sheets
 
 log = logging.getLogger("blue_origin.leads")
 
-PIPELINE_VERSION = "6"
+PIPELINE_VERSION = "7"
 INBOX, OUT, NETWORK = "leads/inbox", "leads/out", "network"
 ACTIONS, TARGETS = "leads/actions.json", "leads/targets.json"
 RECHECK_SECONDS = 60

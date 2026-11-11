@@ -36,7 +36,7 @@ export default function Funnel() {
     { key: 'valid', label: 'Working number', num: true, render: (r) => <Pct k={r.a.valid} n={r.a.unique} label="Valid mobile ÷ unique" />, sort: (r) => r.a.valid, csv: (r) => r.a.valid },
     { key: 'matched', label: 'Matched', num: true, render: (r) => num(r.a.matched), sort: (r) => r.a.matched },
     { key: 'new', label: 'New retailers', num: true, render: (r) => num(r.a.out[NEW]), sort: (r) => r.a.out[NEW] },
-    { key: 'conv', label: 'Became retailers', num: true, render: (r) => <Pct k={r.a.out[NEW]} n={r.a.judged} label="New retailers ÷ leads with a working number, old enough to tell" />, sort: (r) => (r.a.judged ? r.a.out[NEW] / r.a.judged : 0), csv: (r) => (r.a.judged ? ((100 * r.a.out[NEW]) / r.a.judged).toFixed(2) : '') },
+    { key: 'conv', label: 'Became retailers', num: true, render: (r) => <Pct k={r.a.out[NEW]} n={r.a.judged} label="New retailers ÷ leads with a working number and sales data" />, sort: (r) => (r.a.judged ? r.a.out[NEW] / r.a.judged : 0), csv: (r) => (r.a.judged ? ((100 * r.a.out[NEW]) / r.a.judged).toFixed(2) : '') },
     { key: 'react', label: 'Came back', num: true, render: (r) => num(r.a.out[REACTIVATED]), sort: (r) => r.a.out[REACTIVATED] },
     { key: 'rep', label: 'Ordered again', num: true, render: (r) => <Pct k={r.a.repeatRetailers} n={r.a.out[NEW]} label="Billed 2+ months ÷ converted" />, sort: (r) => r.a.repeatRetailers, csv: (r) => r.a.repeatRetailers },
   ];
