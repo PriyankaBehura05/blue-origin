@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     BO_DISTRIBUTOR_SHEETS: str = ""        # e.g. /Power BI/BO_Dashboard/distributors.csv; empty = no download
     BO_GOOGLE_KEY: str = ""                # path to the key json; relative = inside backend/ (default secrets/...)
     SHEETS_DOWNLOAD_MINUTES: int = 360     # automatic runs download at most this often; "Sync now" always does
+    # Lead Generation dashboard: linked Google Sheets (Data quality page) are re-read this often, with the same key,
+    # and the dashboard rebuilt when a tab changed. 0 = only when someone presses "Check now".
+    LEADS_SHEETS_MINUTES: int = 10
     # Reference workbook used to fill blank retailer city / pincode / phone (BO_Consolidate_Final.xlsx)
     BO_INFO_FOLDER: str = ""               # e.g. /INFORMATION
 

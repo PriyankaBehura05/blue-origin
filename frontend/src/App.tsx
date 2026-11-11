@@ -3,6 +3,7 @@ import { Layout } from '@/components/Layout';
 import BenefitsPage from '@/pages/BenefitsPage';
 import DataPage from '@/pages/DataPage';
 import DistributorsPage from '@/pages/DistributorsPage';
+import { LeadsPage } from '@/leads';
 import NetworkPage, { NetworkLayout } from '@/pages/NetworkPage';
 import ReportsPage from '@/pages/ReportsPage';
 import RetailersPage from '@/pages/RetailersPage';
@@ -23,6 +24,8 @@ export default function App() {
           <Route index element={<Navigate to="overview" replace />} />
           <Route path=":tab" element={<NetworkPage />} />
         </Route>
+        <Route path="leads" element={<LeadsPage />} />
+        <Route path="leads/:page" element={<LeadsPage />} />
         <Route path="sales" element={<SalesPage />} />
         <Route path="retailers" element={<RetailersPage />} />
         <Route path="distributors" element={<DistributorsPage />} />

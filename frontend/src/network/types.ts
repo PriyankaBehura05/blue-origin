@@ -72,6 +72,7 @@ export interface Col {
   label: string;
   type?: ColType;
   w?: number; // Excel column width
+  help?: string; // hover help (network/help.ts)
 }
 export type Row = Record<string, unknown>;
 export interface Table {
@@ -82,6 +83,7 @@ export interface Table {
   rows: Row[];
   matrix?: boolean;
   total?: boolean; // summary table: the Excel download gets a TOTAL row
+  help?: string;
 }
 export interface Kpi {
   label: string;
@@ -89,6 +91,7 @@ export interface Kpi {
   delta?: number | null;
   sub?: string;
   tone?: 'up' | 'down';
+  help?: string;
 }
 export interface Series {
   name: string;
@@ -99,7 +102,7 @@ export interface Chart {
   id: string;
   title: string;
   caption?: string;
-  kind: 'bar' | 'stack' | 'group' | 'line';
+  kind: 'bar' | 'stack' | 'group' | 'line' | 'donut';   // donut: one series, one slice per label (colours in `colors`)
   labels: string[];
   series: Series[];
   fmt?: 'inr' | 'num' | 'pct';
@@ -109,6 +112,19 @@ export interface Chart {
   // extra figures shown only in the hover tooltip (not drawn), one value per label
   tipExtra?: { name: string; values: number[]; fmt: 'inr' | 'num' }[];
   colors?: string[]; // one colour per bar (single-series bar charts)
+  valueLabels?: boolean; // write each bar segment's value inside it (stacked bars)
+  domain?: [number, number]; // fixed value-axis range, e.g. [0, 100]
+  help?: string;
+}
+// A titled block inside a page (its own cards, charts and tables), shown below the page's main content
+export interface Section {
+  id: string;
+  title: string;
+  lead?: string;
+  kpis?: Kpi[];
+  charts?: Chart[];
+  tables: Table[];
+  help?: string;
 }
 export interface View {
   lead?: string;
@@ -116,6 +132,7 @@ export interface View {
   kpis?: Kpi[];
   charts?: Chart[];
   tables: Table[];
+  sections?: Section[];
 }
 
 export interface Filters {

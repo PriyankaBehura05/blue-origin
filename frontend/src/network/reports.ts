@@ -1,7 +1,7 @@
 // Report views of the BO Retailer Network dashboard, computed in the browser from the consolidated payload.
 // Definitions follow the BO dashboard: a retailer is "new" in the month of its first purchase; "active" in a
 // quarter when it bought in it; tiers are recomputed on the consolidated quarterly purchase.
-import type { Chart, Col, Filters, Kpi, Model, Retailer, Row, Table, View } from './types';
+import type { Chart, Col, Filters, Kpi, Model, Retailer, Row, Section, Table, View } from './types';
 import { fmtINR, fmtN, fmtSlab, mLabel, MOVE_COLOR, MOVES, moveOf, pct, qLabel, qSel, slabAt, slabText, tierAt, tierFrom, tierInForce, type Move } from './model';
 
 const TIER_KEYS = ['Platinum', 'Gold', 'Silver', 'Green', 'Yellow'];
@@ -27,6 +27,26 @@ const kpi = (label: string, value: string, delta?: number | null, sub?: string, 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
 /* ------------------------------------------------------------ 1. overview */
+// Position of a quarter key ('Q3_FY27') in time: one step per quarter, and the calendar month it starts in.
+function quarterSpan(qk: string): { ord: number; start: Date; end: Date } | null {
+  const mt = /^Q([1-4])_FY(\d{2})$/.exec(qk);
+  if (!mt) return null;
+  const qn = Number(mt[1]);
+  const fy = 2000 + Number(mt[2]);
+  const start = new Date(qn === 4 ? fy : fy - 1, [3, 6, 9, 0][qn - 1], 1);
+  return { ord: fy * 4 + qn, start, end: new Date(start.getFullYear(), start.getMonth() + 3, 1) };
+}
+
+// The latest 4 completed consecutive quarters: a quarter is completed once its last month is over and the data
+// holds its months. It moves by itself whenever a newer quarter completes in the data. null = fewer than 4 (or a gap).
+export function latestCompletedFour(m: Model, now = new Date()): number[] | null {
+  const done = m.Q.map((qk, i) => ({ i, span: quarterSpan(qk) }))
+    .filter((x) => x.span && now >= x.span.end && m.MQ.filter((q) => q === x.i).length >= 3);
+  const win = done.slice(-4);
+  if (win.length < 4 || win.some((x, k) => k > 0 && x.span!.ord !== win[k - 1].span!.ord + 1)) return null;
+  return win.map((x) => x.i);
+}
+
 export function overview(m: Model, f: Filters, rs: Retailer[]): View {
   const { Q, M, LQ } = m;
   const all = f.q < 0;
@@ -35,11 +55,51 @@ export function overview(m: Model, f: Filters, rs: Retailer[]): View {
   const monthly = M.map((_, i) => sum(rs.map((r) => r.m[i])));
   const activeM = M.map((_, i) => rs.reduce((s, r) => s + (r.m[i] > 0 ? 1 : 0), 0));
   const tierSeries = [1, 2, 3, 4, 5].map((ti) => ({ name: m.TIERS[ti], color: tierColor(ti), values: Q.map((_, q) => rs.filter((r) => r.t[q] === ti).length) }));
+  // the same tier mix in rupees: what the retailers on each tier bought in the quarter
+  const tierRevSeries = [1, 2, 3, 4, 5].map((ti) => ({ name: m.TIERS[ti], color: tierColor(ti), values: Q.map((_, q) => qRev(rs.filter((r) => r.t[q] === ti), q)) }));
   const inQ = all ? undefined : M.map((_, i) => i).filter((i) => m.MQ[i] === qi);
   const charts: Chart[] = [
     { id: 'rev', title: 'Monthly revenue', caption: 'Purchases by the selected retailers', kind: 'bar', labels: M.map(mLabel), series: [{ name: 'Revenue', color: 'var(--brand)', values: monthly }], fmt: 'inr', highlight: inQ },
     { id: 'act', title: 'Active retailers per month', caption: 'Retailers with a purchase in the month', kind: 'line', labels: M.map(mLabel), series: [{ name: 'Active retailers', color: 'var(--brand)', values: activeM }] },
     { id: 'tier', title: 'Tier mix by quarter', caption: `Tiered retailers per quarter, on the consolidated quarterly purchase: ${slabText(m)}`, kind: 'stack', labels: Q.map(qLabel), series: tierSeries, wide: true, highlight: all ? undefined : [qi] },
+    { id: 'tierRev', title: 'Tier mix by quarter: revenue', caption: 'What the retailers on each tier bought in the quarter (the tier mix above, in ₹)', kind: 'stack', labels: Q.map(qLabel), series: tierRevSeries, fmt: 'inr', wide: true, highlight: all ? undefined : [qi] },
+  ];
+  // Purchase frequency: in how many of the last (up to) 4 quarters, ending at the selected one, each retailer bought
+  const wEnd = all ? LQ : qi;
+  const wLen = Math.min(4, wEnd + 1);
+  const win = Array.from({ length: wLen }, (_, i) => wEnd - wLen + 1 + i);
+  const freq = win.length >= 2 ? purchaseFrequency(m, rs, win) : null;
+  if (freq) charts.push(freq.chart);
+  // The four retailer KPIs, all for the selected quarter (the latest when "All quarters" is chosen) and its financial year:
+  // Total = every retailer listed up to that quarter, bought or not; Active / New / Consistent are counted from the
+  // quarterly sales (a quarter counts when the retailer's sales in it are above zero).
+  const fyOf = (qk: string) => qk.split('_')[1] ?? qk;
+  const upTo = Q.map((_, i) => i).filter((i) => i <= qi);   // every quarter available, from the first in the data to the selected one
+  const four = latestCompletedFour(m);
+  const fourBefore = four && four[0] > 0 && quarterSpan(Q[four[0] - 1])?.ord === quarterSpan(Q[four[0]])!.ord - 1 ? four.map((i) => i - 1) : null;
+  const inAll = (r: Retailer, qs: number[]) => qs.every((i) => active(r, i));
+  const listedBy = (qx: number) => rs.filter((r) => r.fl <= qx).length;
+  const totalR = listedBy(qi);
+  const activeR = rs.filter((r) => active(r, qi)).length;
+  const prevActive = pq >= 0 ? rs.filter((r) => active(r, pq)).length : null;
+  const newR = qi > 0 ? rs.filter((r) => r.firstQ === qi && active(r, qi)).length : null;
+  const prevNew = pq > 0 ? rs.filter((r) => r.firstQ === pq && active(r, pq)).length : null;
+  const consistentR = rs.filter((r) => inAll(r, upTo)).length;
+  const churnedList = pq >= 0 ? rs.filter((r) => active(r, pq) && !active(r, qi)) : null;   // bought last quarter, nothing in this one
+  const fourR = four ? rs.filter((r) => inAll(r, four)).length : null;
+  const fourPrev = fourBefore ? rs.filter((r) => inAll(r, fourBefore)).length : null;
+  const vsPrev = pq >= 0 ? `vs ${qLabel(Q[pq])}` : '';
+  const core: Kpi[] = [
+    kpi('Total retailers', fmtN(totalR), pq >= 0 ? pct(totalR, listedBy(pq)) : null, `listed since the data began, up to ${qLabel(Q[qi])}, bought or not`),
+    kpi('Active retailers', fmtN(activeR), prevActive == null ? null : pct(activeR, prevActive), `bought in ${qLabel(Q[qi])}${vsPrev ? `, ${vsPrev}` : ''}`),
+    kpi('Consistent retailers', fmtN(consistentR), null,
+      upTo.length === 1 ? `only ${qLabel(Q[0])} so far` : `bought in all ${upTo.length} quarters, ${qLabel(Q[0])} to ${qLabel(Q[qi])}`),
+    kpi('Consistent, last 4 quarters', fourR == null ? '–' : fmtN(fourR), fourR == null || fourPrev == null ? null : pct(fourR, fourPrev),
+      four ? `bought in each of ${qLabel(Q[four[0]])} to ${qLabel(Q[four[3]])}${fourPrev == null ? '' : ', vs the 4 before'}` : 'needs 4 completed quarters in a row'),
+    kpi('Completely new retailers', newR == null ? '–' : fmtN(newR), prevNew == null || newR == null ? null : pct(newR, prevNew),
+      newR == null ? 'first quarter of data' : `first-ever purchase in ${qLabel(Q[qi])}${vsPrev ? `, ${vsPrev}` : ''}`),
+    kpi('Churned retailers', churnedList ? fmtN(churnedList.length) : '–', null,
+      churnedList ? `bought in ${qLabel(Q[pq])}, nothing in ${qLabel(Q[qi])} · ${fmtINR(qRev(churnedList, pq))} bought in ${qLabel(Q[pq])}` : 'first quarter of data', 'down'),
   ];
   const yellow = fmtSlab(m.p.slabs.Yellow);
   let kpis: Kpi[];
@@ -50,8 +110,7 @@ export function overview(m: Model, f: Filters, rs: Retailer[]): View {
     const pt = rs.filter((r) => r.t[LQ - 1] > 0).length;
     kpis = [
       kpi('Revenue, all quarters', fmtINR(rev), null, `${qLabel(Q[0])} to ${qLabel(Q[LQ])}`),
-      kpi('Active retailers', fmtN(buyers), null, `bought in any quarter, of ${fmtN(rs.length)} listed`),
-      kpi('New retailers', fmtN(rs.filter((r) => r.firstQ > 0).length), null, `first purchase since ${qLabel(Q[1])}`),
+      ...core,
       kpi(`Tiered in ${qLabel(Q[LQ])}`, fmtN(tiered), pct(tiered, pt), `vs ${qLabel(Q[LQ - 1])}`),
       kpi('Revenue per active retailer', fmtINR(buyers ? rev / buyers : 0), null, 'all quarters'),
     ];
@@ -60,20 +119,38 @@ export function overview(m: Model, f: Filters, rs: Retailer[]): View {
     const prev = pq >= 0 ? qRev(rs, pq) : null;
     const act = rs.filter((r) => active(r, qi)).length;
     const pact = pq >= 0 ? rs.filter((r) => active(r, pq)).length : null;
-    const nw = qi > 0 ? rs.filter((r) => r.firstQ === qi).length : null;
-    const pnw = pq > 0 ? rs.filter((r) => r.firstQ === pq).length : null;
     const td = rs.filter((r) => r.t[qi] > 0).length;
     const ptd = pq >= 0 ? rs.filter((r) => r.t[pq] > 0).length : null;
     const vs = pq >= 0 ? `vs ${qLabel(Q[pq])}` : '';
     kpis = [
       kpi(`${qLabel(Q[qi])} revenue`, fmtINR(rev), prev == null ? null : pct(rev, prev), vs),
-      kpi('Active retailers', fmtN(act), pact == null ? null : pct(act, pact), vs),
-      kpi('New retailers', nw == null ? '–' : fmtN(nw), pnw == null || nw == null ? null : pct(nw, pnw), nw == null ? 'first quarter of data' : vs),
+      ...core,
       kpi(`Tiered retailers (≥ ${yellow})`, fmtN(td), ptd == null ? null : pct(td, ptd), vs),
       kpi('Revenue per active retailer', fmtINR(act ? rev / act : 0), pact && prev != null ? pct(rev / act, prev / pact) : null, vs),
     ];
   }
-  const tables: Table[] = [];
+  // The four KPIs for every quarter, grouped by financial year (same definitions as the cards above)
+  const byQuarter: Row[] = Q.map((qk, i) => {
+    const sofar = Q.map((_, j) => j).filter((j) => j <= i);
+    const act = rs.filter((r) => active(r, i)).length;
+    const prevAct = i > 0 ? rs.filter((r) => active(r, i - 1)).length : null;
+    return {
+      FY: `FY ${fyOf(qk).replace('FY', '')}`, Quarter: qLabel(qk), Total: listedBy(i), Active: act,
+      Growth: prevAct == null ? null : pct(act, prevAct),
+      New: i > 0 ? rs.filter((r) => r.firstQ === i && active(r, i)).length : null,
+      Consistent: rs.filter((r) => sofar.every((j) => active(r, j))).length,
+      Churned: i > 0 ? rs.filter((r) => active(r, i - 1) && !active(r, i)).length : null,
+      Revenue: qRev(rs, i),
+    };
+  });
+  const tables: Table[] = [{
+    id: 'qtrkpi', title: 'Retailer KPIs by quarter and financial year',
+    caption: 'Total = listed up to the quarter · Active = bought in the quarter · New = first-ever purchase in the quarter · Churned = bought in the previous quarter, nothing in this one · '
+      + 'Consistent = bought in every quarter available, from the first quarter of the data up to this one',
+    cols: [{ k: 'FY', label: 'Financial year', w: 14 }, { k: 'Quarter', label: 'Quarter', w: 12 }, n('Total', 'Total retailers'), n('Active', 'Active retailers'),
+      pc('Growth', 'Active vs previous qtr'), n('Consistent', 'Consistent retailers'), n('New', 'Completely new'), n('Churned', 'Churned retailers'), inr('Revenue', 'Revenue')],
+    rows: byQuarter,
+  }];
   // breakdown one level below the current filter: region -> state -> distributor
   const byKey = f.dist ? null : f.state ? 'dist' : f.region ? 'state' : 'region';
   if (byKey) {
@@ -122,10 +199,79 @@ export function overview(m: Model, f: Filters, rs: Retailer[]): View {
       : [...baseCols, inr('Revenue', 'Revenue'), inr('Prev', 'Previous qtr'), pc('Growth', 'Growth'), tier('Tier', 'Tier'), ...geoCols],
     rows: top,
   });
+  if (freq && freq.table.rows.length) tables.push(freq.table);
   return { kpis, charts, tables };
 }
 
+// "How often do retailers actually buy?": retailers that bought in the whole window, in 2..n-1 of its n quarters,
+// or in just one. Counted from the quarterly revenue (a quarter counts when its sales are above zero), over the
+// retailers that bought at least once in the window. Retailers who bought only once, or who stopped after
+// buying repeatedly, are listed as the retention opportunity.
+function purchaseFrequency(m: Model, rs: Retailer[], win: number[]): { chart: Chart; table: Table } {
+  const { Q } = m;
+  const nq = win.length;
+  const last = win[nq - 1];
+  const hits = (r: Retailer) => win.filter((i) => active(r, i)).length;
+  const buyers = rs.filter((r) => hits(r) > 0);
+  const full = buyers.filter((r) => hits(r) === nq).length;
+  const one = buyers.filter((r) => hits(r) === 1).length;
+  const mid = buyers.length - full - one;
+  const share = (v: number) => (buyers.length ? Math.round((v / buyers.length) * 100) : 0);
+  const labels = [`Active all ${nq} quarters`];
+  const values = [full];
+  const colors = ['#ff6a3d'];
+  if (nq >= 3) {
+    labels.push(nq === 3 ? 'Active 2 of 3 quarters' : `Active 2–${nq - 1} of ${nq} quarters`);
+    values.push(mid);
+    colors.push('#1f2f5a');
+  }
+  labels.push('Active exactly 1 quarter');
+  values.push(one);
+  colors.push('#5b6b8a');
+  const span = `${qLabel(Q[win[0]])} to ${qLabel(Q[last])}`;
+  const chart: Chart = {
+    id: 'freq', title: 'Retailer purchase frequency', kind: 'donut', labels, colors, wide: true,
+    series: [{ name: 'Retailers', color: colors[0], values }],
+    caption: `${fmtN(buyers.length)} retailers who bought in ${span} · ${share(buyers.length - one)}% bought in 2 or more of the ${nq} quarters (repeat buyers) · `
+      + `${share(one)}% bought in only one: the retention opportunity`,
+  };
+  // healthy repeat buyers (2+ quarters, bought in the latest) are left out of the list
+  const open = buyers.filter((r) => hits(r) === 1 || !active(r, last));
+  const WIN_BACK = 'Stopped buying: win back';
+  const REPEAT = 'Bought once, this quarter: get a repeat';
+  const GONE = 'Bought once, not back';
+  const status = (r: Retailer) => (hits(r) >= 2 ? WIN_BACK : active(r, last) ? REPEAT : GONE);
+  const rank = (s: string) => [WIN_BACK, REPEAT, GONE].indexOf(s);
+  const winRev = (r: Retailer) => sum(win.map((i) => r.q[i]));
+  const rows: Row[] = open.map((r) => {
+    const lastBought = [...win].reverse().find((i) => active(r, i));
+    return { ...base(r), Status: status(r), Quarters: hits(r), Last: lastBought == null ? '' : qLabel(Q[lastBought]), Rev: winRev(r), ...Object.fromEntries(win.map((i) => [Q[i], r.q[i]])) };
+  }).sort((a, b) => rank(String(a.Status)) - rank(String(b.Status)) || Number(b.Rev) - Number(a.Rev));
+  const table: Table = {
+    id: 'freq', title: 'Retention opportunities',
+    caption: `Retailers who bought only once, or stopped buying, in ${span}. Stopped-buying repeat buyers come first, then by revenue in the period`,
+    cols: [...baseCols, { k: 'Status', label: 'Why listed', w: 34 }, n('Quarters', `Quarters active (of ${nq})`), { k: 'Last', label: 'Last bought', w: 12 },
+      inr('Rev', 'Revenue in period'), ...win.map((i) => inr(Q[i], qLabel(Q[i]))), ...geoCols],
+    rows,
+  };
+  return { chart, table };
+}
+
 /* ------------------------------------------------------------ 2. new retailers */
+// What a retailer is in quarter q: 'new' = its first-ever purchase falls in q; 'react' = it bought in q and before, but
+// not in the quarter just before (inactive for at least one whole quarter); null = neither (a continuing buyer, or no
+// purchase). The first quarter of the data cannot be classified: there is nothing before it.
+type Kind = 'new' | 'react';
+const kindIn = (r: Retailer, q: number): Kind | null => {
+  if (q <= 0) return null;
+  if (r.firstQ === q) return 'new';
+  return active(r, q) && r.firstQ >= 0 && r.firstQ < q && !active(r, q - 1) ? 'react' : null;
+};
+const lastBoughtBefore = (r: Retailer, q: number) => {
+  for (let j = q - 1; j >= 0; j--) if (active(r, j)) return j;
+  return -1;
+};
+
 export function newRetailers(m: Model, f: Filters, rs: Retailer[]): View {
   const { Q, M, LQ, MQ } = m;
   const all = f.q < 0;
@@ -146,6 +292,7 @@ export function newRetailers(m: Model, f: Filters, rs: Retailer[]): View {
   const qRows = rs.filter(inScope).map((r) => ({
     ...base(r), FirstQ: qLabel(Q[r.firstQ]), FQ: r.firstQ, FirstMonth: mLabel(M[r.first]), QRev: r.q[r.firstQ], Tier: r.t[r.firstQ],
     Repeat: r.firstQ + 1 < Q.length ? (r.q[r.firstQ + 1] > 0 ? 'Yes' : 'No') : '–', Since: sum(r.m.slice(r.first)), Cur: r.t[LQ],
+    ...(all ? {} : Object.fromEntries(M.map((_, i) => i).filter((i) => MQ[i] === qi).map((i) => [M[i], r.m[i]]))),
   })).sort((a, b) => (all ? b.FQ - a.FQ || b.Since - a.Since : b.QRev - a.QRev));
   const groups = new Map<string, Row>();
   rs.forEach((r) => {
@@ -162,14 +309,57 @@ export function newRetailers(m: Model, f: Filters, rs: Retailer[]): View {
     const rp = repeat(i);
     return { Quarter: qLabel(q), New: c.length, Rev: sum(c.map((r) => r.q[i])), Repeat: rp == null ? null : round1(rp), StillActive: c.filter((r) => r.q[LQ] > 0).length, Tiered: c.filter((r) => r.t[LQ] > 0).length };
   });
+  // ---- completely new vs reactivated, per quarter (see kindIn)
+  const scopeQ = all ? Q.map((_, i) => i).filter((i) => i > 0) : qi > 0 ? [qi] : [];
+  const qMonths = qi > 0 ? M.map((_, i) => i).filter((i) => MQ[i] === qi) : [];   // the months shown as columns for one quarter
+  const stat = Q.map((_, q) => {
+    const nw = rs.filter((r) => kindIn(r, q) === 'new');
+    const re = rs.filter((r) => kindIn(r, q) === 'react');
+    return { nw, re, nwS: qRev(nw, q), reS: qRev(re, q) };
+  });
+  const qIdx = Q.map((_, i) => i).filter((i) => i > 0);
+  const nwCount = sum(scopeQ.map((q) => stat[q].nw.length));
+  const nwSales = sum(scopeQ.map((q) => stat[q].nwS));
+  const reSales = sum(scopeQ.map((q) => stat[q].reS));
+  const reUnique = new Set(scopeQ.flatMap((q) => stat[q].re.map((r) => r.id))).size;
+  const reEvents = sum(scopeQ.map((q) => stat[q].re.length));
+  const salesBase = sum(scopeQ.map((q) => qRev(rs, q)));
+  const share = (v: number) => (salesBase ? `${((v / salesBase) * 100).toFixed(1)}% of ${all ? 'all sales' : `${qLabel(Q[qi])} sales`}` : '');
+  const reRows: Row[] = rs.flatMap((r) => scopeQ.filter((q) => kindIn(r, q) === 'react').map((q) => {
+    const lb = lastBoughtBefore(r, q);
+    const firstMonth = M.findIndex((_, i) => MQ[i] === q);
+    return {
+      ...base(r), ReactQ: qLabel(Q[q]), RQ: q, LastBefore: lb < 0 ? '' : qLabel(Q[lb]), Gap: lb < 0 ? null : q - lb - 1,
+      QRev: r.q[q], Before: sum(r.m.slice(0, firstMonth)), Since: sum(r.m.slice(firstMonth)), Tier: r.t[q], Cur: r.t[LQ],
+      ...(all ? {} : Object.fromEntries(qMonths.map((i) => [M[i], r.m[i]]))),
+    };
+  })).sort((a, b) => (all ? Number(b.RQ) - Number(a.RQ) : 0) || Number(b.QRev) - Number(a.QRev));
+  const catQuarter: Row[] = qIdx.map((q) => ({
+    Quarter: qLabel(Q[q]), NewN: stat[q].nw.length, NewS: stat[q].nwS, ReN: stat[q].re.length, ReS: stat[q].reS,
+    Both: stat[q].nwS + stat[q].reS, AllS: qRev(rs, q),
+  }));
+  const catMonthIdx = M.map((_, i) => i).filter((i) => MQ[i] > 0 && (all || MQ[i] === qi));
+  const catMonth: Row[] = catMonthIdx.map((i) => {
+    const { nw, re } = stat[MQ[i]];
+    return {
+      Month: mLabel(M[i]), Quarter: qLabel(Q[MQ[i]]), NewA: nw.filter((r) => r.m[i] > 0).length, NewS: sum(nw.map((r) => r.m[i])),
+      ReA: re.filter((r) => r.m[i] > 0).length, ReS: sum(re.map((r) => r.m[i])),
+    };
+  });
+  const chartMonths = M.map((_, i) => i).filter((i) => MQ[i] > 0);
   const rr = all ? null : repeat(qi);
   const withRepeat = cohort.filter((c) => c.Repeat != null);
   const avgRepeat = withRepeat.length ? sum(withRepeat.map((c) => Number(c.Repeat))) / withRepeat.length : null;
   return {
-    lead: `A retailer is new in the month of its first purchase. ${qLabel(Q[0])} is the first quarter of data, so counting starts in ${mLabel(M[1])}. Click a bar to select that month or quarter.`,
+    lead: `Two kinds of new business. Completely new = the retailer's first-ever purchase. Reactivated = it had bought before, had no purchase in the quarter just before, and bought again. ${qLabel(Q[0])} is the first quarter of data, so counting starts after it. Click a bar to select that month or quarter.`,
     kpis: [
       kpi(`New in ${mLabel(M[mi])}`, fmtN(newM[mi]), mi > 1 ? pct(newM[mi], newM[mi - 1]) : null, mi > 1 ? `vs ${mLabel(M[mi - 1])} (${fmtN(newM[mi - 1])})` : ''),
       kpi(all ? 'New, all quarters' : `New in ${qLabel(Q[qi])}`, fmtN(all ? sum(newQ) : newQ[qi]), all || qi < 2 ? null : pct(newQ[qi], newQ[qi - 1]), all || qi < 2 ? '' : `vs ${qLabel(Q[qi - 1])}`),
+      kpi(all ? 'Reactivated, all quarters' : `Reactivated in ${qLabel(Q[qi])}`, !all && qi === 0 ? '–' : fmtN(all ? reUnique : stat[qi].re.length),
+        all || qi < 2 ? null : pct(stat[qi].re.length, stat[qi - 1].re.length),
+        all ? `${fmtN(reEvents)} reactivations (a retailer can come back more than once)` : qi === 0 ? 'first quarter of data' : `vs ${qLabel(Q[qi - 1])}: back after at least a quarter away`),
+      kpi('Sales: completely new', fmtINR(nwSales), null, `${fmtN(nwCount)} retailers · ${share(nwSales)}`),
+      kpi('Sales: reactivated', fmtINR(reSales), null, `${fmtN(all ? reEvents : stat[qi]?.re.length ?? 0)} retailers · ${share(reSales)}`),
       kpi('Bought again next quarter', rr != null ? `${rr.toFixed(1)}%` : all && avgRepeat != null ? `${avgRepeat.toFixed(1)}%` : '–', null,
         all ? 'average across cohorts' : rr == null ? 'next quarter not in the data yet' : `of the ${qLabel(Q[qi])} cohort`),
     ],
@@ -178,11 +368,30 @@ export function newRetailers(m: Model, f: Filters, rs: Retailer[]): View {
         tipExtra: [{ name: 'Sales value (first month)', values: newMRev.slice(1), fmt: 'inr' }] },
       { id: 'newQ', title: 'New retailers by quarter', caption: all ? 'All quarters' : `Selected: ${qLabel(Q[qi])}`, kind: 'bar', labels: Q.slice(1).map(qLabel), series: [{ name: 'New retailers', color: 'var(--brand)', values: newQ.slice(1) }], highlight: all ? undefined : [qi - 1], onClickKey: 'quarter',
         tipExtra: [{ name: 'Sales value (joining quarter)', values: newQRev.slice(1), fmt: 'inr' }] },
+      { id: 'catCount', title: 'Completely new vs reactivated retailers', caption: all ? 'All quarters' : `Selected: ${qLabel(Q[qi])}`, kind: 'stack', labels: qIdx.map((q) => qLabel(Q[q])),
+        series: [{ name: 'Completely new', color: 'var(--brand)', values: qIdx.map((q) => stat[q].nw.length) }, { name: 'Reactivated', color: '#3b6fb6', values: qIdx.map((q) => stat[q].re.length) }],
+        highlight: all || qi < 1 ? undefined : [qi - 1], onClickKey: 'quarter' },
+      { id: 'catSalesQ', title: 'Sales from completely new vs reactivated retailers', caption: 'Purchases in the quarter by each group', kind: 'stack', labels: qIdx.map((q) => qLabel(Q[q])), fmt: 'inr',
+        series: [{ name: 'Completely new', color: 'var(--brand)', values: qIdx.map((q) => stat[q].nwS) }, { name: 'Reactivated', color: '#3b6fb6', values: qIdx.map((q) => stat[q].reS) }],
+        highlight: all || qi < 1 ? undefined : [qi - 1] },
+      { id: 'catSalesM', title: 'Monthly sales: completely new vs reactivated', caption: 'Each month is split by how its quarter classed the retailer', kind: 'stack', labels: chartMonths.map((i) => mLabel(M[i])), fmt: 'inr', wide: true,
+        series: [{ name: 'Completely new', color: 'var(--brand)', values: chartMonths.map((i) => sum(stat[MQ[i]].nw.map((r) => r.m[i]))) }, { name: 'Reactivated', color: '#3b6fb6', values: chartMonths.map((i) => sum(stat[MQ[i]].re.map((r) => r.m[i]))) }],
+        highlight: all || qi < 1 ? undefined : chartMonths.map((i, k) => (MQ[i] === qi ? k : -1)).filter((k) => k >= 0) },
     ],
     tables: [
-      { id: 'newQuarter', title: all ? 'New retailers – all quarters' : `New retailers – ${qLabel(Q[qi])}`,
+      { id: 'newQuarter', title: all ? 'Completely new retailers – all quarters' : `Completely new retailers – ${qLabel(Q[qi])}`,
         caption: all ? `${fmtN(qRows.length)} onboarded from ${qLabel(Q[1])} to ${qLabel(Q[LQ])}` : qi === 0 ? 'First quarter of data: no onboarding count' : `${fmtN(qRows.length)} onboarded in ${qLabel(Q[qi])}`,
-        cols: [...baseCols, { k: 'FirstQ', label: 'Joined in' }, { k: 'FirstMonth', label: 'First month' }, inr('QRev', 'Joining qtr revenue'), tier('Tier', 'Joining tier'), { k: 'Repeat', label: 'Bought next qtr' }, inr('Since', 'Revenue since joining'), tier('Cur', `Tier ${qLabel(Q[LQ])}`), ...geoCols], rows: qRows },
+        cols: [...baseCols, { k: 'FirstQ', label: 'Joined in' }, { k: 'FirstMonth', label: 'First month' }, inr('QRev', 'Joining qtr revenue'), ...(all ? [] : qMonths.map((i) => inr(M[i], mLabel(M[i])))), tier('Tier', 'Joining tier'), { k: 'Repeat', label: 'Bought next qtr' }, inr('Since', 'Revenue since joining'), tier('Cur', `Tier ${qLabel(Q[LQ])}`), ...geoCols], rows: qRows },
+      { id: 'reactRows', title: all ? 'Reactivated retailers – all quarters' : `Reactivated retailers – ${qLabel(Q[qi])}`,
+        caption: all ? `${fmtN(reRows.length)} reactivations by ${fmtN(reUnique)} retailers, ${qLabel(Q[1])} to ${qLabel(Q[LQ])}` : qi === 0 ? 'First quarter of data: nothing earlier to compare with' : `${fmtN(reRows.length)} retailers came back in ${qLabel(Q[qi])} after at least a quarter without a purchase`,
+        cols: [...baseCols, { k: 'ReactQ', label: 'Reactivated in' }, { k: 'LastBefore', label: 'Last bought before' }, n('Gap', 'Quarters away'), inr('QRev', 'Reactivation qtr revenue'),
+          ...(all ? [] : qMonths.map((i) => inr(M[i], mLabel(M[i])))), inr('Before', 'Revenue before the break'), inr('Since', 'Revenue since coming back'), tier('Tier', 'Tier that quarter'), tier('Cur', `Tier ${qLabel(Q[LQ])}`), ...geoCols],
+        rows: reRows },
+      { id: 'catQuarter', total: true, title: 'Completely new vs reactivated: sales by quarter', caption: 'Retailers and what they bought in each quarter. Continuing buyers are not in this table',
+        cols: [{ k: 'Quarter', label: 'Quarter' }, n('NewN', 'Completely new retailers'), inr('NewS', 'Sales: completely new'), n('ReN', 'Reactivated retailers'), inr('ReS', 'Sales: reactivated'), inr('Both', 'Sales: both together'), inr('AllS', 'All sales in the quarter')], rows: catQuarter },
+      { id: 'catMonth', total: true, title: all ? 'Completely new vs reactivated: sales by month' : `Completely new vs reactivated: sales by month, ${qLabel(Q[qi])}`,
+        caption: 'Each month is split by how its quarter classed the retailer; retailers = those who bought in the month',
+        cols: [{ k: 'Month', label: 'Month' }, { k: 'Quarter', label: 'Quarter' }, n('NewA', 'Completely new retailers'), inr('NewS', 'Sales: completely new'), n('ReA', 'Reactivated retailers'), inr('ReS', 'Sales: reactivated')], rows: catMonth },
       { id: 'newMonth', title: `New retailers – ${mLabel(M[mi])}`, caption: `${fmtN(mRows.length)} retailers made their first purchase in ${mLabel(M[mi])}`,
         cols: [...baseCols, inr('FirstRev', 'First month revenue'), inr('QRev', 'Quarter revenue'), inr('Since', 'Revenue since joining'), tier('Tier', 'Quarter tier'), ...geoCols], rows: mRows },
       { id: 'newCohorts', total: true, title: 'Onboarding cohorts', caption: `How each quarter's new retailers have done since. Still active and now tiered are for ${qLabel(Q[LQ])}.`,
@@ -317,9 +526,114 @@ export function tierMovement(m: Model, f: Filters, rs: Retailer[]): View {
   };
 }
 
+/* ------------------------------------------------------------ 4a. retention & growth */
+// New + Reactivated - Churned for every quarter-to-quarter step, with the cohort retention trend. Same meanings as
+// the rest of the dashboard: new = first-ever purchase in the quarter; reactivated = bought in it and earlier but not in
+// the quarter before; churned = bought in the quarter before and nothing in this one.
+function growthSection(m: Model, f: Filters, rs: Retailer[]): Section | null {
+  const { Q, LQ } = m;
+  const all = f.q < 0;
+  const qi = all ? LQ : f.q;
+  if (qi < 1) return null;
+  const newOf = (q: number) => rs.filter((r) => r.firstQ === q && active(r, q));
+  const reactOf = (q: number) => rs.filter((r) => kindIn(r, q) === 'react');
+  const churnOf = (q: number) => rs.filter((r) => active(r, q - 1) && !active(r, q));
+  const qIdx = Q.map((_, i) => i).filter((i) => i > 0);
+  const steps = qIdx.map((q) => {
+    const nw = newOf(q);
+    const re = reactOf(q);
+    const ch = churnOf(q);
+    const before = rs.filter((r) => active(r, q - 1)).length;
+    return {
+      q, nw: nw.length, re: re.length, ch: ch.length, net: nw.length + re.length - ch.length, before, after: rs.filter((r) => active(r, q)).length,
+      nwS: qRev(nw, q), reS: qRev(re, q), chS: qRev(ch, q - 1), kept: before - ch.length,
+    };
+  });
+  const cur = steps[qi - 1];
+  const prv = qi >= 2 ? steps[qi - 2] : null;
+  const signed = (v: number) => `${v > 0 ? '+' : ''}${fmtN(v)}`;
+  const kpis: Kpi[] = [
+    kpi('New retailers', fmtN(cur.nw), prv ? pct(cur.nw, prv.nw) : null, `${fmtINR(cur.nwS)} bought in ${qLabel(Q[qi])}`, 'up'),
+    kpi('Reactivated retailers', fmtN(cur.re), prv ? pct(cur.re, prv.re) : null, `${fmtINR(cur.reS)} bought in ${qLabel(Q[qi])}`, 'up'),
+    kpi('Churned retailers', fmtN(cur.ch), null, `${fmtINR(cur.chS)} bought in ${qLabel(Q[qi - 1])}`, 'down'),
+    kpi('Net effective additions', signed(cur.net), null, `${fmtN(cur.before)} active in ${qLabel(Q[qi - 1])} → ${fmtN(cur.after)} in ${qLabel(Q[qi])}`, cur.net >= 0 ? 'up' : 'down'),
+  ];
+  // 'Q2→Q3 FY26' (or 'Q4 FY25→Q1 FY26' across a year end)
+  const stepLabel = (q: number) => {
+    const [aq, afy] = Q[q - 1].split('_');
+    const [bq, bfy] = Q[q].split('_');
+    return afy === bfy ? `${aq}→${bq} ${bfy}` : `${aq} ${afy}→${bq} ${bfy}`;
+  };
+  const label = qIdx.map(stepLabel);
+  const hi = all ? undefined : [qi - 1];
+  const NEW = '#1f2f5a';
+  const REACT = '#ff5a36';
+  const CHURN = '#9aa5b8';
+  const charts: Chart[] = [
+    { id: 'growthStack', title: 'New vs reactivated entrants, by quarter transition', caption: all ? 'All quarters' : `Selected: ${qLabel(Q[qi])}`, kind: 'stack', labels: label, valueLabels: true,
+      series: [{ name: 'New', color: NEW, values: steps.map((s) => s.nw) }, { name: 'Reactivated', color: REACT, values: steps.map((s) => s.re) }],
+      highlight: hi, onClickKey: 'quarter' },
+    { id: 'growthCompare', title: 'New, reactivated and churned by quarter', caption: 'Quarter-wise comparison', kind: 'group', labels: label, wide: true,
+      series: [{ name: 'New', color: NEW, values: steps.map((s) => s.nw) }, { name: 'Reactivated', color: REACT, values: steps.map((s) => s.re) },
+        { name: 'Churned', color: CHURN, values: steps.map((s) => s.ch) }], highlight: hi, onClickKey: 'quarter' },
+    { id: 'growthNet', title: 'Net effective additions by quarter', caption: 'New + Reactivated − Churned. Green = the active base grew, red = it shrank', kind: 'bar', labels: label, wide: true,
+      series: [{ name: 'Net effective additions', color: 'var(--brand)', values: steps.map((s) => s.net) }],
+      colors: steps.map((s) => (s.net >= 0 ? MOVE_COLOR.Upgraded : MOVE_COLOR.Downgraded)), highlight: hi, onClickKey: 'quarter' },
+  ];
+
+  // cohort retention: of the retailers that joined in a quarter, the % that bought again k quarters later
+  const cohorts = qIdx.map((c) => {
+    const grp = newOf(c);
+    const row: Row = { Cohort: qLabel(Q[c]), Size: grp.length };
+    const trend: (number | null)[] = [];
+    for (let k = 1; k < Q.length; k++) {
+      const v = c + k <= LQ && grp.length ? round1((grp.filter((r) => active(r, c + k)).length / grp.length) * 100) : null;
+      row[`k${k}`] = v;
+      trend.push(v);
+    }
+    return { row, trend, c };
+  });
+  const palette = ['#1f2f5a', '#ff5a36', '#4a7fd1', '#2a9d8f', '#e9a23b', '#8d6cab', '#9aa5b8'];
+  if (cohorts.some((x) => x.trend.some((v) => v != null))) {
+    charts.unshift({
+      id: 'cohortTrend', title: 'Retention by cohort: % of cohort still active', caption: 'Period 1 is the joining quarter (100%); each later period is the share that bought in that quarter', kind: 'line', fmt: 'pct', domain: [0, 100],
+      labels: Array.from({ length: Q.length }, (_, k) => `Period ${k + 1}`),
+      series: cohorts.filter((x) => x.trend.some((v) => v != null)).map((x, i) => ({ name: `${qLabel(Q[x.c])} cohort`, color: palette[i % palette.length], values: [100, ...x.trend] })),
+    });
+  }
+
+  const metrics: [string, (s: (typeof steps)[number]) => number][] = [['New (first-ever transaction)', (s) => s.nw], ['Reactivated (win-back)', (s) => s.re],
+    ['Churned', (s) => s.ch], ['Net effective add', (s) => s.net]];
+  const tables: Table[] = [
+    { id: 'growthAdds', title: 'Effective retailers added per quarter = New + Reactivated − Churned',
+      caption: 'One column per quarter transition. Churned = bought in the earlier quarter, nothing in the later one',
+      cols: [{ k: 'Metric', label: 'Metric', w: 34 }, ...steps.map((s) => n(`s${s.q}`, stepLabel(s.q)))],
+      rows: metrics.map(([name, pick]) => ({ Metric: name, ...Object.fromEntries(steps.map((s) => [`s${s.q}`, pick(s)])) })) },
+    { id: 'growthQoQ', title: 'New, reactivated, churned and net additions, quarter on quarter',
+      caption: 'Every quarter-to-quarter step. Active this quarter = active last quarter + new + reactivated − churned',
+      cols: [{ k: 'Step', label: 'Quarter step', w: 26 }, n('Before', 'Active last qtr'), n('New', 'New'), n('React', 'Reactivated'), n('Churned', 'Churned'), n('Net', 'Net effective additions'),
+        n('After', 'Active this qtr'), n('Rate', 'Retention %'), inr('NewS', 'Sales: new'), inr('ReS', 'Sales: reactivated'), inr('ChS', 'Churned: bought last qtr')],
+      rows: steps.map((s) => ({
+        Step: `${qLabel(Q[s.q - 1])} → ${qLabel(Q[s.q])}`, Before: s.before, New: s.nw, React: s.re, Churned: s.ch, Net: s.net, After: s.after,
+        Rate: s.before ? round1((s.kept / s.before) * 100) : null, NewS: s.nwS, ReS: s.reS, ChS: s.chS,
+      })) },
+    { id: 'cohortRet', title: 'Cohort retention',
+      caption: 'Each row is the retailers whose first-ever purchase was in that quarter; the columns are the % of them that bought in each later quarter',
+      cols: [{ k: 'Cohort', label: 'Joined in' }, n('Size', 'Retailers'), ...Array.from({ length: Q.length - 1 }, (_, k) => n(`k${k + 1}`, `After ${k + 1} qtr${k ? 's' : ''} %`))],
+      rows: cohorts.map((x) => x.row) },
+  ];
+  return {
+    id: 'growth', title: 'Retention & Growth', kpis, charts, tables,
+    lead: `Net effective additions ${prv ? (cur.net >= prv.net ? 'rose' : 'fell') : 'were'} ${prv ? `from ${signed(prv.net)} (${stepLabel(qi - 1)}) to ` : ''}${signed(cur.net)} in ${stepLabel(qi)}: `
+      + `${fmtN(cur.nw + cur.re)} entered (${fmtN(cur.nw)} new + ${fmtN(cur.re)} reactivated) and ${fmtN(cur.ch)} churned. `
+      + `The cards show this step${all ? ' (the latest: select a quarter for another one)' : ''}; the charts and tables compare every quarter.`,
+  };
+}
+
 /* ------------------------------------------------------------ 4. retention */
 export function retention(m: Model, f: Filters, rs: Retailer[]): View {
   const { Q, LQ, M } = m;
+  const growth = growthSection(m, f, rs);
   const rate = Q.map((_, q) => {
     if (q === 0) return null;
     const p = rs.filter((r) => active(r, q - 1));
@@ -363,6 +677,7 @@ export function retention(m: Model, f: Filters, rs: Retailer[]): View {
         ...(LQ > 0 ? [{ id: 'retByDist', total: true, title: `Retention by distributor – ${qLabel(Q[LQ])}`, caption: 'Lowest retention first', cols: distCols(LQ), rows: byDist(LQ) }] : []),
         dormantTable,
       ],
+      sections: growth ? [growth] : undefined,
     };
   }
   const qi = f.q;
@@ -391,6 +706,7 @@ export function retention(m: Model, f: Filters, rs: Retailer[]): View {
         rows: react.map((r) => ({ ...base(r), Cur: r.q[qi], Tier: r.t[qi], Life: r.life })).sort((a, b) => b.Cur - a.Cur) },
       dormantTable,
     ],
+    sections: growth ? [growth] : undefined,
   };
 }
 

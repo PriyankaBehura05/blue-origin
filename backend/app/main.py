@@ -14,6 +14,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
+from app.leads.services import leads_service
 from app.repositories import get_repository
 from app.services.sync_service import scheduler
 
@@ -23,7 +24,10 @@ async def lifespan(_: FastAPI):
     settings = get_settings()
     # Automatic pipeline: poll the Dropbox inbox in the background (SYNC_INTERVAL_MINUTES, 0 = off)
     scheduler.start(get_repository, settings)
+    # Lead Generation dashboard: re-read its linked Google Sheets (LEADS_SHEETS_MINUTES, 0 = off)
+    leads_service.start_auto(get_repository, settings)
     yield
+    leads_service.stop_auto()
     scheduler.stop()
 
 

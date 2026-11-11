@@ -15,6 +15,8 @@
 .net-f:focus-within { border-color: var(--brand); }
 .net-f.on { border-color: var(--brand); background: var(--brand-soft); }
 
+.net-section { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; padding-top: 20px; border-top: 1px solid var(--border); }
+.net-section > h2 { font-size: 18px; margin: 0; }
 .net-lead { margin: 0; color: var(--muted); max-width: 110ch; line-height: 1.5; }
 .net-search { max-width: 520px; width: 100%; height: 40px; font-size: 14px; }
 

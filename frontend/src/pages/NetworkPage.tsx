@@ -3,11 +3,13 @@ import { useMemo, useState } from 'react';
 import { Navigate, Outlet, useParams } from 'react-router-dom';
 import { NetworkProvider, useNetwork } from '@/network/NetworkContext';
 import { ChartCard, KpiGrid, NetTable, RetailerPanel } from '@/network/components';
+import { HelpTip } from '@/components/HelpTip';
+import { filterHelp, PAGE_HELP, withHelp } from '@/network/help';
 import { exportCsv, exportXlsx } from '@/network/export';
 import { applyFilters, filterText, fmtN, MOVES, qLabel, qLong } from '@/network/model';
 import { QUARTER_RULE } from '@/utils/format';
 import { lookup, VIEWS, type ViewKey } from '@/network/reports';
-import type { Model, Table, View } from '@/network/types';
+import type { Chart, Kpi, Model, Table, View } from '@/network/types';
 
 // 'construction' pages are in the menu but have no content yet
 type PageKey = ViewKey | 'lookup' | 'construction';
@@ -47,7 +49,7 @@ export default function NetworkPage() {
   const page = NETWORK_PAGES.find((p) => p.slug === tab);
   const net = useNetwork();
   if (!page) return <Navigate to="/dashboard/overview" replace />;
-  if (page.key === 'construction') return <UnderConstruction title={page.label} />;
+  if (page.key === 'construction') return <UnderConstruction title={page.label} help={PAGE_HELP[page.slug]} />;
   if (net.error && !net.model) {
     return (
       <div className="card card-pad setup">
@@ -58,13 +60,13 @@ export default function NetworkPage() {
     );
   }
   if (!net.model) return <div className="empty">Loading {fmtN(30000)}+ retailers…</div>;
-  return <Page m={net.model} page={{ key: page.key, label: page.label }} />;
+  return <Page m={net.model} page={{ key: page.key, label: page.label, slug: page.slug }} />;
 }
 
-function UnderConstruction({ title }: { title: string }) {
+function UnderConstruction({ title, help }: { title: string; help?: string }) {
   return (
     <div className="net">
-      <div className="page-header"><div><h1>{title}</h1></div></div>
+      <div className="page-header"><div><h1>{title}<HelpTip text={help} /></h1></div></div>
       <div className="card card-pad empty-state">
         <div style={{ fontSize: 34 }} aria-hidden>🚧</div>
         <h3>Under construction</h3>
@@ -74,14 +76,15 @@ function UnderConstruction({ title }: { title: string }) {
   );
 }
 
-function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'construction'>; label: string } }) {
+function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'construction'>; label: string; slug: string } }) {
   const { f, setF, clearFilters, search, setSearch, select, flash, reload, loading } = useNetwork();
   const [packing, setPacking] = useState(false);
   const rs = useMemo(() => applyFilters(m, f), [m, f]);
   const view: View | null = useMemo(() => {
-    if (page.key === 'lookup') return lookup(m, rs, search);
-    return VIEWS[page.key](m, f, rs);
+    const v = page.key === 'lookup' ? lookup(m, rs, search) : VIEWS[page.key](m, f, rs);
+    return withHelp(page.key, v, m, f);
   }, [m, f, rs, page.key, search]);
+  const fHelp = filterHelp(m, f);
 
   const D = m.p.distributors;
   const states = [...new Set(D.filter((d) => !f.region || d.r === f.region).map((d) => d.s))].filter(Boolean).sort();
@@ -97,7 +100,10 @@ function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'constructi
     flash('Building the report pack…');
     try {
       const keys: ViewKey[] = ['overview', 'new', 'tier', 'retention', 'pipeline'];
-      const tables = keys.flatMap((k) => VIEWS[k](m, f, rs).tables);
+      const tables = keys.flatMap((k) => {
+        const v = VIEWS[k](m, f, rs);
+        return [...v.tables, ...(v.sections?.flatMap((s) => s.tables) ?? [])];
+      });
       await exportXlsx(tables, stamp, filters);
     } catch (e) {
       flash(`Report pack failed: ${e instanceof Error ? e.message : e}`);
@@ -108,13 +114,27 @@ function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'constructi
   const onPick = (key?: 'month' | 'quarter') =>
     key === 'month' ? (i: number) => setF({ m: i + 1 }) : key === 'quarter' ? (i: number) => setF({ q: i + 1 }) : undefined;
   const active = Boolean(f.region || f.state || f.dist || f.tier || f.q >= 0 || (page.key === 'tier' && f.mv));
-  const sel = (label: string, value: string | number, opts: [string | number, string][], on: (v: string) => void) => (
+  const sel = (label: string, value: string | number, opts: [string | number, string][], on: (v: string) => void, help?: string) => (
     <label className={`net-f${value !== '' && value !== -1 ? ' on' : ''}`}>
-      <span>{label}</span>
+      <span>{label}<HelpTip text={help ?? fHelp[label]} /></span>
       <select value={value} onChange={(e) => on(e.target.value)} aria-label={label}>
         {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </label>
+  );
+
+  // the cards, charts and tables of the page itself or of one of its sections
+  const body = (b: { kpis?: Kpi[]; charts?: Chart[]; tables: Table[] }) => (
+    <>
+      {b.kpis && b.kpis.length > 0 && <KpiGrid kpis={b.kpis} />}
+      {b.charts && (
+        <>
+          <div className="net-grid2">{b.charts.filter((c) => !c.wide).map((c) => <ChartCard key={c.id} c={c} onPick={onPick(c.onClickKey)} />)}</div>
+          {b.charts.filter((c) => c.wide).map((c) => <ChartCard key={c.id} c={c} onPick={onPick(c.onClickKey)} />)}
+        </>
+      )}
+      {b.tables.map((t) => <NetTable key={`${t.id}|${filters}`} t={t} onOpen={select} onExport={onExport} />)}
+    </>
   );
 
   return (
@@ -122,7 +142,7 @@ function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'constructi
       <div className="net-head">
         <div className="net-titlerow">
           <div>
-            <h1>{page.label}</h1>
+            <h1>{page.label}<HelpTip text={PAGE_HELP[page.slug]} /></h1>
             <div className="net-scope" title="Active filters">{filters}</div>
           </div>
           <div className="toolbar">
@@ -136,11 +156,11 @@ function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'constructi
           {sel('Distributor', f.dist, [['', 'All'], ...dists.map((d) => [d, d] as [string, string])], (v) => setF({ dist: v }))}
           {sel('Quarter', f.q, [[-1, 'All quarters'], ...m.Q.map((q, i) => [i, qLong(q)] as [number, string]).reverse()], (v) => setF({ q: Number(v) }))}
           {sel(f.q < 0 ? `Tier (${qLabel(m.Q[m.LQ])})` : `Tier (${qLabel(m.Q[f.q])})`, f.tier,
-            [['', 'All'], ['tiered', 'Any tier'], ...[...m.TIERS].reverse().map((t) => [t, t] as [string, string])], (v) => setF({ tier: v }))}
+            [['', 'All'], ['tiered', 'Any tier'], ...[...m.TIERS].reverse().map((t) => [t, t] as [string, string])], (v) => setF({ tier: v }), fHelp.Tier)}
           {page.key === 'tier' && sel('Movement', f.mv, [['', 'All'], ...MOVES.map((k) => [k, k] as [string, string])], (v) => setF({ mv: v }))}
           {page.key === 'pipeline' && (
             <label className="net-f on">
-              <span>Within % of next slab</span>
+              <span>Within % of next slab<HelpTip text={fHelp.Near} /></span>
               <input type="number" min={1} max={60} step={5} value={f.near} onChange={(e) => setF({ near: Math.max(1, Math.min(60, Number(e.target.value) || 20)) })} />
             </label>
           )}
@@ -155,14 +175,14 @@ function Page({ m, page }: { m: Model; page: { key: Exclude<PageKey, 'constructi
           {page.key === 'lookup' && (
             <input className="input net-search" autoFocus placeholder="Search by name, retailer ID, district, phone or old spelling" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search retailers" />
           )}
-          {view.kpis && view.kpis.length > 0 && <KpiGrid kpis={view.kpis} />}
-          {view.charts && (
-            <>
-              <div className="net-grid2">{view.charts.filter((c) => !c.wide).map((c) => <ChartCard key={c.id} c={c} onPick={onPick(c.onClickKey)} />)}</div>
-              {view.charts.filter((c) => c.wide).map((c) => <ChartCard key={c.id} c={c} onPick={onPick(c.onClickKey)} />)}
-            </>
-          )}
-          {view.tables.map((t) => <NetTable key={`${t.id}|${filters}`} t={t} onOpen={select} onExport={onExport} />)}
+          {body(view)}
+          {view.sections?.map((s) => (
+            <section key={s.id} className="net-section">
+              <h2>{s.title}<HelpTip text={s.help} /></h2>
+              {s.lead && <p className="net-lead">{s.lead}</p>}
+              {body(s)}
+            </section>
+          ))}
         </>
       )}
       <p className="note">

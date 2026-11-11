@@ -1,10 +1,12 @@
 // Building blocks of the dashboard pages: pills, KPI cards, charts, tables and the retailer detail panel.
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Drawer } from '@/components/ui';
+import { HelpTip } from '@/components/HelpTip';
 import { useTheme } from '@/hooks/useTheme';
 import { fmtINR, fmtN, fmtPct, mLabel, qLabel, qLong } from './model';
+import { PANEL_HELP } from './help';
 import type { Chart, Col, Kpi, Model, Row, Table } from './types';
 
 const TIERS = ['Untiered', 'Yellow', 'Green', 'Silver', 'Gold', 'Platinum'];
@@ -24,7 +26,7 @@ export function KpiGrid({ kpis }: { kpis: Kpi[] }) {
     <div className="net-kpis">
       {kpis.map((k) => (
         <div className="card net-kpi" key={k.label}>
-          <div className="kpi-label">{k.label}</div>
+          <div className="kpi-label">{k.label}<HelpTip text={k.help} /></div>
           <div className={`net-kpi-value ${k.tone ?? ''}`}>{k.value}</div>
           <div className="net-kpi-sub">
             {k.delta != null && <span className={`net-delta ${k.delta > 0.05 ? 'up' : k.delta < -0.05 ? 'down' : 'flat'}`}>{k.delta >= 0 ? '▲' : '▼'} {Math.abs(k.delta).toFixed(1)}%</span>}
@@ -80,11 +82,12 @@ export function ChartCard({ c, onPick }: { c: Chart; onPick?: (i: number) => voi
       }
     />
   );
+  if (c.kind === 'donut') return <DonutCard c={c} />;
   return (
     <div className={`card net-card${c.wide ? ' wide' : ''}`} key={theme}>
       <div className="net-card-h">
         <div>
-          <h3>{c.title}</h3>
+          <h3>{c.title}<HelpTip text={c.help} /></h3>
           {c.caption && <div className="net-cap">{c.caption}</div>}
         </div>
       </div>
@@ -94,7 +97,7 @@ export function ChartCard({ c, onPick }: { c: Chart; onPick?: (i: number) => voi
             <LineChart data={data} margin={{ top: 8, right: 14, left: 4, bottom: 0 }}>
               <CartesianGrid stroke={grid} vertical={false} />
               {xAxis}
-              <YAxis {...axis} tickFormatter={(v) => axisFmt(v)} width={64} />
+              <YAxis {...axis} tickFormatter={(v) => axisFmt(v)} width={64} domain={c.domain} />
               {tip}
               {c.series.map((s, i) => <Line key={s.name} type="monotone" dataKey={s.name} stroke={colors[i]} strokeWidth={2.2} dot={{ r: 2.5 }} activeDot={{ r: 5 }} isAnimationActive={false} connectNulls />)}
             </LineChart>
@@ -103,7 +106,7 @@ export function ChartCard({ c, onPick }: { c: Chart; onPick?: (i: number) => voi
               onClick={onPick ? (e) => { if (e?.activeTooltipIndex != null) onPick(Number(e.activeTooltipIndex)); } : undefined}>
               <CartesianGrid stroke={grid} vertical={false} />
               {xAxis}
-              <YAxis {...axis} tickFormatter={(v) => axisFmt(v)} width={64} />
+              <YAxis {...axis} tickFormatter={(v) => axisFmt(v)} width={64} domain={c.domain} />
               {tip}
               {c.series.map((s, si) => (
                 <Bar key={s.name} dataKey={s.name} stackId={c.kind === 'stack' ? 'a' : undefined} fill={colors[si]} isAnimationActive={false}
@@ -111,6 +114,7 @@ export function ChartCard({ c, onPick }: { c: Chart; onPick?: (i: number) => voi
                   {(hl || c.colors) && data.map((_, i) => (
                     <Cell key={i} {...(c.colors ? { fill: cssVar(c.colors[i]) } : {})} fillOpacity={hl && !hl.has(i) ? 0.35 : 1} />
                   ))}
+                  {c.valueLabels && <LabelList dataKey={s.name} position="center" fill="#fff" fontSize={12} fontWeight={600} formatter={(v: unknown) => (Number(v) ? fmtN(Number(v)) : '')} />}
                 </Bar>
               ))}
             </BarChart>
@@ -122,6 +126,50 @@ export function ChartCard({ c, onPick }: { c: Chart; onPick?: (i: number) => voi
           {c.series.map((s, i) => <span key={s.name}><i style={{ background: colors[i] }} />{s.name}</span>)}
         </div>
       )}
+    </div>
+  );
+}
+
+// Pie with a hole: one slice per label, the share written on the slice, counts and shares in the tooltip
+function DonutCard({ c }: { c: Chart }) {
+  const theme = useTheme();
+  const vals = c.series[0]?.values ?? [];
+  const total = vals.reduce<number>((s, v) => s + (v ?? 0), 0);
+  const slices = c.labels.map((name, i) => ({ name, value: vals[i] ?? 0, color: cssVar(c.colors?.[i] ?? c.series[0].color) }));
+  const share = (v: number) => (total ? (v / total) * 100 : 0);
+  const inside = ({ cx, cy, midAngle, innerRadius, outerRadius, value }: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; value: number }) => {
+    if (share(value) < 4) return null;
+    const rad = (-midAngle * Math.PI) / 180;
+    const r = innerRadius + (outerRadius - innerRadius) / 2;
+    return <text x={cx + r * Math.cos(rad)} y={cy + r * Math.sin(rad)} fill="#fff" fontSize={14} fontWeight={700} textAnchor="middle" dominantBaseline="central">{`${Math.round(share(value))}%`}</text>;
+  };
+  return (
+    <div className="card net-card wide" key={theme}>
+      <div className="net-card-h">
+        <div>
+          <h3>{c.title}<HelpTip text={c.help} /></h3>
+          {c.caption && <div className="net-cap">{c.caption}</div>}
+        </div>
+      </div>
+      <div className="net-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Tooltip content={({ active, payload }) => active && payload?.length ? (
+              <div className="net-tip">
+                <div className="net-tip-h">{String(payload[0].name)}</div>
+                <div><b>{fmtN(Number(payload[0].value))}</b> retailers ({share(Number(payload[0].value)).toFixed(1)}%)</div>
+              </div>
+            ) : null} />
+            <Pie data={slices} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" startAngle={90} endAngle={-270}
+              paddingAngle={1} stroke="none" label={inside} labelLine={false} isAnimationActive={false}>
+              {slices.map((s) => <Cell key={s.name} fill={s.color} />)}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="net-legend" style={{ justifyContent: 'center' }}>
+        {slices.map((s) => <span key={s.name}><i style={{ background: s.color }} />{s.name} · <b>{fmtN(s.value)}</b></span>)}
+      </div>
     </div>
   );
 }
@@ -186,7 +234,7 @@ export function NetTable({ t, onOpen, onExport, extra, compact }: {
     <div className="card net-card">
       <div className="net-card-h">
         <div>
-          <h3>{t.title}</h3>
+          <h3>{t.title}<HelpTip text={t.help} /></h3>
           {t.caption && <div className="net-cap">{t.caption}</div>}
         </div>
         <div className="toolbar">
@@ -209,7 +257,7 @@ export function NetTable({ t, onOpen, onExport, extra, compact }: {
                 <th key={c.k} className={`${isNum(c) ? 'r' : ''} ${i === 0 ? 'first' : ''}`}
                   onClick={() => !t.matrix && setSort((s) => ({ k: c.k, dir: s?.k === c.k ? (-s.dir as 1 | -1) : isNum(c) || c.type === 'tier' ? -1 : 1 }))}
                   aria-sort={sort?.k === c.k ? (sort.dir > 0 ? 'ascending' : 'descending') : undefined}>
-                  {c.label}{sort?.k === c.k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}
+                  <HelpTip text={c.help}>{c.label}</HelpTip>{sort?.k === c.k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}
                 </th>
               ))}
             </tr>
@@ -242,25 +290,25 @@ export function NetTable({ t, onOpen, onExport, extra, compact }: {
 export function RetailerPanel({ m, id, onClose }: { m: Model; id: string; onClose: () => void }) {
   const r = m.byId.get(id);
   if (!r) return null;
-  const chart: Chart = { id: 'one', title: 'Monthly purchases', kind: 'bar', labels: m.M.map(mLabel), series: [{ name: 'Purchase', color: 'var(--brand)', values: r.m }], fmt: 'inr' };
+  const chart: Chart = { id: 'one', title: 'Monthly purchases', kind: 'bar', labels: m.M.map(mLabel), series: [{ name: 'Purchase', color: 'var(--brand)', values: r.m }], fmt: 'inr', help: PANEL_HELP.chart };
   return (
     <Drawer title={r.n} subtitle={<span className="note">{r.id} · {r.dist} · {r.state} · {r.region}</span>} onClose={onClose}>
       <dl className="net-kv">
-        <dt>Current tier ({qLabel(m.Q[m.LQ])})</dt><dd><TierPill t={r.t[m.LQ]} /></dd>
-        <dt>Best tier</dt><dd><TierPill t={r.best} /></dd>
+        <dt><HelpTip text={PANEL_HELP.current}>Current tier ({qLabel(m.Q[m.LQ])})</HelpTip></dt><dd><TierPill t={r.t[m.LQ]} /></dd>
+        <dt><HelpTip text={PANEL_HELP.best}>Best tier</HelpTip></dt><dd><TierPill t={r.best} /></dd>
         <dt>District</dt><dd>{r.ds || '–'}</dd>
         <dt>City / area</dt><dd>{r.ct || '–'}</dd>
         <dt>Pincode</dt><dd>{r.pin || '–'}</dd>
         <dt>Phone(s)</dt><dd>{r.phones.length ? r.phones.join(', ') : '–'}</dd>
-        <dt>Lifetime revenue</dt><dd>{fmtINR(r.life)}</dd>
-        <dt>First purchase</dt><dd>{r.first >= 0 ? mLabel(m.M[r.first]) : '–'}</dd>
+        <dt><HelpTip text={PANEL_HELP.life}>Lifetime revenue</HelpTip></dt><dd>{fmtINR(r.life)}</dd>
+        <dt><HelpTip text={PANEL_HELP.first}>First purchase</HelpTip></dt><dd>{r.first >= 0 ? mLabel(m.M[r.first]) : '–'}</dd>
       </dl>
       <ChartCard c={chart} />
       <div className="card net-card">
-        <div className="net-card-h"><h3>Purchase and tier by quarter</h3></div>
+        <div className="net-card-h"><h3>Purchase and tier by quarter<HelpTip text={PANEL_HELP.quarters} /></h3></div>
         <div className="net-scroll short">
           <table className="net-table">
-            <thead><tr><th>Quarter</th><th className="r">Purchase</th><th>Tier</th><th>Tier in distributor sheet</th></tr></thead>
+            <thead><tr><th>Quarter</th><th className="r"><HelpTip text={PANEL_HELP.purchase}>Purchase</HelpTip></th><th><HelpTip text={PANEL_HELP.tier}>Tier</HelpTip></th><th><HelpTip text={PANEL_HELP.sheetTier}>Tier in distributor sheet</HelpTip></th></tr></thead>
             <tbody>
               {m.Q.map((q, i) => (
                 <tr key={q}>

@@ -4,10 +4,13 @@ import { api } from '@/services';
 import { useAsync } from '@/hooks/useAsync';
 import { setTheme, useTheme } from '@/hooks/useTheme';
 import { NETWORK_PAGES } from '@/pages/NetworkPage';
+import { LEADS_BASE, LEADS_PAGES } from '@/leads';
 import type { HealthStatus } from '@/types';
 import { clearSession, updateUser, useSession } from '@/services/session';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ChangePassword } from '@/components/ChangePassword';
+import { HelpTip } from '@/components/HelpTip';
+import { NAV_HELP, PAGE_HELP } from '@/network/help';
 import logo from '@/assets/technosport-logo.png';
 
 const NAV = [
@@ -127,6 +130,7 @@ export function Layout() {
   };
   const theme = useTheme();
   const { pathname } = useLocation();
+  const inLeads = pathname.startsWith(LEADS_BASE); // the other module; everything else belongs to the BO Dashboard
   const isAdmin = useSession()?.user.role === 'admin';
   const health = useAsync(() => api.getHealth(), []);
   const ready = !health.error && health.data?.store_ok === true;
@@ -147,29 +151,53 @@ export function Layout() {
         </div>
         <div className="brand">BLUE ORIGIN</div>
         <div className="brand-sub">Sales & Retailer Growth</div>
+        <div className="module-switch" aria-label="Dashboards">
+          <NavLink to="/dashboard/overview" className={`module-tab ${inLeads ? '' : 'active'}`} onClick={() => setOpen(false)}>BO Dashboard</NavLink>
+          <NavLink to={LEADS_BASE} className={`module-tab ${inLeads ? 'active' : ''}`} onClick={() => setOpen(false)}>Lead Generation Dashboard</NavLink>
+        </div>
+        {inLeads ? (
+          <nav className="nav-scroll" aria-label="Lead Generation">
+            <div className="nav-h">Lead Generation</div>
+            {LEADS_PAGES.map((p) => (
+              <HelpTip key={p.id} text={p.soWhat} side="right" block>
+                <NavLink to={`${LEADS_BASE}/${p.id}`} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
+                  <span className="nav-icon"><p.icon size={16} strokeWidth={1.75} aria-hidden style={{ verticalAlign: '-3px' }} /></span>
+                  {p.title}
+                </NavLink>
+              </HelpTip>
+            ))}
+          </nav>
+        ) : (
         <nav className="nav-scroll" aria-label="Pages">
           <div className="nav-h">BO Dashboard</div>
           {NETWORK_PAGES.map((p) => (
-            <NavLink key={p.slug} to={`/dashboard/${p.slug}`} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
-              <span className="nav-icon">{p.icon}</span>
-              {p.label}
-              {p.badge && <span className="nav-badge">{p.badge}</span>}
-            </NavLink>
+            <HelpTip key={p.slug} text={PAGE_HELP[p.slug]} side="right" block>
+              <NavLink to={`/dashboard/${p.slug}`} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
+                <span className="nav-icon">{p.icon}</span>
+                {p.label}
+                {p.badge && <span className="nav-badge">{p.badge}</span>}
+              </NavLink>
+            </HelpTip>
           ))}
           <div className="nav-h">Manage</div>
           {NAV.map((n) => (
-            <NavLink key={n.to} to={n.to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
-              <span className="nav-icon">{n.icon}</span>
-              {n.label}
-            </NavLink>
+            <HelpTip key={n.to} text={NAV_HELP[n.to]} side="right" block>
+              <NavLink to={n.to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
+                <span className="nav-icon">{n.icon}</span>
+                {n.label}
+              </NavLink>
+            </HelpTip>
           ))}
           {isAdmin && (
-            <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
-              <span className="nav-icon">👥</span>
-              Users
-            </NavLink>
+            <HelpTip text={NAV_HELP['/users']} side="right" block>
+              <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
+                <span className="nav-icon">👥</span>
+                Users
+              </NavLink>
+            </HelpTip>
           )}
         </nav>
+        )}
         <div className="sidebar-foot">TechnoSport · v0.3</div>
       </aside>
       {open && <div className="drawer-backdrop sidebar-scrim" onClick={() => setOpen(false)} />}
