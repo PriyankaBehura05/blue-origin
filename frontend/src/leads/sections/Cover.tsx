@@ -72,12 +72,17 @@ function useCover() {
 export function buildInsights(M: Model, c: ReturnType<typeof useCover>, f: Filters, rg: Range): Insight[] {
   const out: Insight[] = [];
   const { L, S, t } = c;
+  const noSales = rg[0] > M.p.salesEnd; // the sales data has not reached this period at all
+  const undecided = L.out[PENDING] > 0 && L.out[NEW] + L.out[NOT_CONVERTED] === 0; // no lead can be judged yet
   if (!M.p.hasLeads) {
     out.push({ insight: 'No leads yet', number: 'No lead sheet is linked',
       action: 'Link the lead Google Sheet on the Data & settings page', owner: 'Marketing Lead' });
   } else {
     const conv = L.judged ? (100 * L.out[NEW]) / L.judged : 0;
-    out.push({ insight: conv >= t.conversion_pct ? 'More leads than planned are becoming retailers' : 'Too few leads are becoming retailers',
+    if (undecided) out.push({ insight: 'Waiting for sales data',
+      number: `${num(L.out[PENDING])} leads are pending sales data (sales run to ${monthName(M, M.p.salesEnd)}); we cannot tell yet who became a retailer`,
+      action: 'Keep calling the new leads now; results fill in by themselves when the sales data arrives', owner: 'Marketing Lead + RSMs' });
+    else out.push({ insight: conv >= t.conversion_pct ? 'More leads than planned are becoming retailers' : 'Too few leads are becoming retailers',
       number: `${conv.toFixed(1)}% of ${num(L.judged)} leads became new retailers (target ${t.conversion_pct}%)${L.out[PENDING] ? `; ${num(L.out[PENDING])} leads are pending sales data` : ''}`,
       action: conv >= t.conversion_pct ? 'Put more budget into the best campaigns' : 'Call every new lead within 2 days before spending more on ads',
       owner: 'Marketing Lead + RSMs' });
@@ -98,17 +103,17 @@ export function buildInsights(M: Model, c: ReturnType<typeof useCover>, f: Filte
         action: 'Move budget from the weakest campaign to the best one this month', owner: 'Marketing Lead' });
     }
     const share = S.newAll ? (100 * S.newMkt) / S.newAll : 0;
-    out.push({ insight: 'How many new retailers came from leads', number: `${num(S.newMkt)} of ${num(S.newAll)} new retailers (${share.toFixed(0)}%; target ${t.marketing_share_pct}%)`,
+    if (!noSales) out.push({ insight: 'How many new retailers came from leads', number: `${num(S.newMkt)} of ${num(S.newAll)} new retailers (${share.toFixed(0)}%; target ${t.marketing_share_pct}%)`,
       action: share >= t.marketing_share_pct ? 'Keep the mix and check cost per lead monthly' : 'Spend more on the sources and campaigns that bring the most new retailers',
       owner: 'Marketing Lead' });
   }
-  if (S.prevBilled) {
+  if (S.prevBilled && !noSales) {
     const ret = (100 * S.retained) / S.prevBilled;
     out.push({ insight: ret >= t.retention_pct ? 'Retailers keep buying, on target' : 'Fewer retailers bought again than planned',
       number: `${ret.toFixed(1)}% of ${num(S.prevBilled)} retailers who bought last period bought again (target ${t.retention_pct}%)`,
       action: 'Plan ASM visits for the at-risk list (Retailers & actions page)', owner: 'RSMs' });
   }
-  out.push({ insight: 'Sales at risk', number: `${num(S.atRisk)} retailers have not ordered for 2 months; they used to buy ${inr(S.atRiskRevenue)} a quarter`,
+  if (!noSales) out.push({ insight: 'Sales at risk', number: `${num(S.atRisk)} retailers have not ordered for 2 months; they used to buy ${inr(S.atRiskRevenue)} a quarter`,
     action: 'WhatsApp and an ASM call within 2 weeks; note who comes back in the action list', owner: 'ASMs via RSMs' });
   return out.slice(0, 5);
 }

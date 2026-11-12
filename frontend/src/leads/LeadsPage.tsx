@@ -202,6 +202,7 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
   }, [M, f.state, d.city]);
   const sorted = <T extends { c: string }>(a: T[]) => [...a].sort((x, y) => x.c.localeCompare(y.c));
   const idx = (a: string[]) => sorted(a.map((c, i) => ({ c, i })).filter((x) => x.c));
+  const leadSources = useMemo(() => new Set(M.p.leads.src.filter((_, i) => M.p.leads.uniq[i])), [M]); // only sources that have leads
   const months = M.p.months.map((_, i) => i).filter((i) => i >= M.leadStart && i <= M.leadEnd).reverse();
 
   const ADV: (keyof Filters)[] = ['campaign', 'tier', 'outcome', 'level', 'window'];
@@ -214,15 +215,15 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
   );
 
   const periodOpts = [
-    ...leadQuarters(M).map((q) => ({ v: `q:${q}`, l: quarterName(q) + partialNote(M, `q:${q}`) })),
     { v: 'all', l: periodName(M, 'all') },
+    ...[...leadQuarters(M)].reverse().map((q) => ({ v: `q:${q}`, l: quarterName(q) + partialNote(M, `q:${q}`) })),
     ...months.map((m) => ({ v: `m:${m}`, l: `Month: ${monthName(M, m)}` })),
   ];
   return (
     <div className={`ld-filters${more ? ' expanded' : ''}`} role="search" aria-label="Global filters">
       <span className="ld-fi"><Filter size={15} strokeWidth={STROKE} aria-hidden />Filters</span>
       {sel('period', 'Quarter or month', periodOpts, false)}
-      {sel('source', 'Source', [...SOURCE_NAMES.map((s, i) => ({ v: i, l: s === 'Organic' ? 'Not from a lead' : s }))].filter((o) => o.v === ORGANIC || d.source[o.v as number]), true, 'All sources')}
+      {sel('source', 'Source', SOURCE_NAMES.map((s, i) => ({ v: i, l: s })).filter((o) => o.v !== ORGANIC && leadSources.has(o.v)), true, 'All sources')}
       {sel('state', 'State', idx(d.state).map((x) => ({ v: x.i, l: x.c })), true, 'All states')}
       {sel('city', 'City', sorted(cities).map((x) => ({ v: x.i, l: x.c })), true, 'All cities')}
       {sel('dist', 'Distributor', idx(d.dist).map((x) => ({ v: x.i, l: x.c })), true, 'All distributors')}
