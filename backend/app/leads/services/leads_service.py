@@ -32,7 +32,7 @@ from . import sheets_source as sheets
 
 log = logging.getLogger("blue_origin.leads")
 
-PIPELINE_VERSION = "7"
+PIPELINE_VERSION = "8"   # 8: copies of a lead in another tab counted once
 INBOX, OUT, NETWORK = "leads/inbox", "leads/out", "network"
 ACTIONS, TARGETS = "leads/actions.json", "leads/targets.json"
 RECHECK_SECONDS = 60

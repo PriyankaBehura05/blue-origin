@@ -93,6 +93,7 @@ def prepare_sales(inp: Inputs, log: List[Step]) -> Sales:
 
 def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) -> pd.DataFrame:
     parts = []
+    undated: dict = {}   # tab -> its mobiles, for tabs with no lead-date column (a contact list, say)
     for t in inp.of("leads"):
         df, cols = t.frame, list(t.frame.columns)
         get = lambda k: df[pick(cols, k)] if pick(cols, k) else pd.Series([""] * len(df), index=df.index)  # noqa: E731
@@ -129,6 +130,7 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
             log.append(Step(t.file, "duplicate copies of the same lead removed", n1, len(df), note))
         part = pd.DataFrame({
             "file": t.file,
+            "lead_id": get("lead_id").loc[df.index].fillna("").str.strip(),
             "date": get("date").loc[df.index].map(N.lead_date),
             "mobile_raw": get("mobile").loc[df.index],
             "alt_raw": get("alt_mobile").loc[df.index],
@@ -152,6 +154,8 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
             "f_tracked": bool(pick(cols, "owner") or pick(cols, "called")),   # this sheet has ASM columns at all
         })
         n1 = len(part)
+        if not pick(cols, "date"):
+            undated[t.file] = set(part["mobile_raw"].map(N.mobile)) - {""}
         part = part[part["date"].notna()]
         log.append(Step(t.file, "rows with a readable lead date", n1, len(part),
                         "" if pick(cols, "date") else "no lead-date column found"))
@@ -180,16 +184,31 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
     leads = leads.drop(columns=["f_cat_raw"])
     leads["alt"] = leads["alt_raw"].map(N.mobile)
     leads["valid"] = leads["mobile"] != ""
+    # the same lead copied into another tab (a state-wise extract of the Meta or Google tab, say): same lead id and mobile.
+    # It is one lead, owned by the row of a platform tab (so it keeps its source); the copies stay until their follow-up
+    # (ASM, called, visited, order) is merged below, then they are dropped, so nothing they carry is lost
+    ranked = leads.assign(_other=(leads["source"] == "Other").astype(int)).sort_values(["_other", "date", "file"], kind="stable")
+    keyed = (ranked["lead_id"] != "") & ranked["valid"]
+    dup = keyed & ranked.duplicated(["lead_id", "mobile"])
+    leads["copy"] = False
+    leads.loc[ranked.index[dup.to_numpy()], "copy"] = True
+    for f, nums in undated.items():
+        alone = nums - set(leads["mobile"])
+        log.append(Step(f, "numbers in a tab with no lead date: listed here, not counted as leads", len(nums), len(alone),
+                        f"{len(alone):,} of the {len(nums):,} numbers are in no other tab; without a date or source they cannot be "
+                        "placed in a period or on a platform"))
     leads["city_key"] = leads["city_name"].map(N.city_key)
     leads["name_key"] = leads["name"].map(N.name_key)
     log.append(Step("all lead files", "rows with a valid 10-digit mobile (the rest stay as 'Invalid number')",
                     len(leads), int(leads["valid"].sum())))
     # first touch: the earliest lead per mobile is the unique lead; later ones are repeats
     leads = leads.sort_values(["date", "file"], kind="stable").reset_index(drop=True)
-    first = ~leads["mobile"].duplicated() | ~leads["valid"]
+    real = ~leads["copy"]
+    first = pd.Series(False, index=leads.index)
+    first[real] = ~leads.loc[real, "mobile"].duplicated() | ~leads.loc[real, "valid"]
     leads["unique"] = first
     log.append(Step("all lead files", "unique leads (first lead per mobile; invalid numbers count once per row)",
-                    len(leads), int(first.sum())))
+                    int(real.sum()), int(first.sum())))
     # the ASM columns may be filled on any row of a mobile (a repeat enquiry often carries the call): one set per
     # mobile - called / visited / order = yes on any row, the largest order value, the latest owner and category
     v = leads["valid"]
@@ -200,7 +219,13 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
             per[c] = g[c].agg(lambda s: next((x for x in reversed(s.tolist()) if x), ""))
         for c in per.columns:
             leads.loc[v, c] = leads.loc[v, "mobile"].map(per[c]).to_numpy()
-    return leads.drop(columns=["mobile_raw", "alt_raw"])
+    n = len(leads)
+    leads = leads[~leads["copy"]].reset_index(drop=True)
+    if len(leads) < n:
+        log.append(Step("all lead files", "copies of the same lead in another tab counted once", n, len(leads),
+                        "same lead id and mobile in two tabs (e.g. a state-wise extract); the platform tab's row is kept with its "
+                        "source, and the copy's ASM follow-up is merged into it"))
+    return leads.drop(columns=["mobile_raw", "alt_raw", "copy", "lead_id"])
 
 
 def _first_filled(df: pd.DataFrame, columns: List[str]) -> pd.Series:

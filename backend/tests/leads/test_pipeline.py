@@ -215,3 +215,31 @@ def test_sheet_cleaning_duplicates_junk_names_and_categories():
     assert "9123400001" in L["mob"] and "B" in L["name"]
     steps = {s["step"] for s in p["steps"]}
     assert {"placeholder and test rows removed", "duplicate copies of the same lead removed", "mobiles repaired"} <= steps
+
+
+def test_a_lead_copied_into_another_tab_counts_once_under_its_platform():
+    """Fictional rows: a state-wise extract tab repeats Meta leads (same Id and mobile) and only the extract has the ASM
+    follow-up. Each lead counts once, stays Meta, and keeps the extract's follow-up. A tab with numbers but no lead date is
+    logged, not counted."""
+    from app.leads.pipeline.build import I, prepare_leads
+    head = "Id,created_time,full_name,phone_number,shop_name"
+    meta = (head + "\nL1,10-04-2026,A,9876500001,Alpha Sports\nL2,11-04-2026,B,9876500002,Beta Sports\n"
+            "L3,12-04-2026,C,9876500003,Gamma Sports\n")
+    extract = (head + ",ASM NAME,Calling Done,Visit Done\nL1,10-04-2026,A,9876500001,Alpha Sports,Ravi K,Yes,Yes\n"
+               "L2,11-04-2026,B,9876500002,Beta Sports,Meena S,Yes,No\nL9,13-04-2026,D,9876500009,Delta Sports,,,\n")
+    contacts = "name,phone\nX,9876500001\nY,9876500077\n"
+    sales = {"retailers.csv": RETAILERS.encode(), "retailer_month.csv": MONTHS.encode(), "retailer_quarter.csv": QUARTERS.encode()}
+    inp = I.load({"Meta_Leads.csv": meta.encode(), "Detail1-andhra_pradesh.csv": extract.encode(), "Sheet5.csv": contacts.encode()}, sales)
+    log = []
+    leads = prepare_leads(inp, log, date(2026, 11, 9)).set_index("mobile")
+    assert len(leads) == 4 and leads["unique"].all()                     # L1, L2, L3 once each, plus L9 only in the extract
+    assert leads.loc[["9876500001", "9876500002", "9876500003"], "source"].eq("Meta").all()
+    assert leads.loc["9876500009", "source"] == "Other"                  # no platform row for it: kept, not dropped
+    assert (leads.loc["9876500001", "f_owner"], leads.loc["9876500002", "f_owner"]) == ("Ravi K", "Meena S")
+    assert leads.loc["9876500001", "f_called"] and leads.loc["9876500001", "f_visited"] and not leads.loc["9876500002", "f_visited"]
+    assert "copy" not in leads and "lead_id" not in leads
+    steps = {s.step: s for s in log}
+    assert (steps["copies of the same lead in another tab counted once"].rows_in,
+            steps["copies of the same lead in another tab counted once"].rows_out) == (6, 4)
+    dateless = steps["numbers in a tab with no lead date: listed here, not counted as leads"]
+    assert (dateless.rows_in, dateless.rows_out) == (2, 1)               # 9876500077 is in no other tab
