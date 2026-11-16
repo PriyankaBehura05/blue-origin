@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Card, Crumbs, NeedsData, Pct, Section, Table, csvRows, inr, num, useLeads, type Col } from '../ui';
 import { SECTIONS } from '../sections';
-import { leadOk, NEW, outcomeOf, PENDING, revIn, SMALL_SAMPLE, spendIn, type Model } from '../model';
+import { useAdBudget } from '../adSpend';
+import CampaignPerf, { DataScope } from './CampaignPerf';
+import { leadOk, NEW, outcomeOf, PENDING, revIn, spendIn, type Model } from '../model';
 
 interface Row {
   key: number;
@@ -14,17 +16,6 @@ interface Row {
   rev90: number;
   rev180: number;
 }
-type Tag = 'Scale' | 'Fix' | 'Kill' | 'Too early';
-
-function tagOf(r: Row, t: Record<string, number>, hasSpend: boolean): Tag {
-  if (r.valid < SMALL_SAMPLE) return 'Too early';
-  const rate = (100 * r.conv) / r.valid;
-  const cpr = r.conv ? r.spend / r.conv : Infinity;
-  if (rate >= t.conversion_pct && (!hasSpend || cpr <= t.cost_per_retailer)) return 'Scale';
-  if (rate < 0.5 * t.conversion_pct && (!hasSpend || cpr > 2 * t.cost_per_retailer)) return 'Kill';
-  return 'Fix';
-}
-
 function aggregate(M: Model, idx: number[], level: number, window: number) {
   let rows = 0, unique = 0, valid = 0, conv = 0, rev90 = 0, rev180 = 0;
   const ret = M.ret[level];
@@ -45,6 +36,7 @@ function aggregate(M: Model, idx: number[], level: number, window: number) {
 }
 
 export default function Campaigns() {
+  const budget = useAdBudget(true);
   const { M, f, rg } = useLeads();
   const [src, setSrc] = useState<number | null>(null);
   const [camp, setCamp] = useState<number | null>(null);
@@ -93,7 +85,6 @@ export default function Campaigns() {
       { key: 'payback', label: 'Payback (months)', num: true, render: (r: Row) => (r.rev90 ? ((r.spend / ((r.rev90 / 3) * margin))).toFixed(1) : '—'), sort: (r: Row) => (r.rev90 ? r.spend / ((r.rev90 / 3) * margin) : Infinity) },
       { key: 'roi', label: '6-month ROI', num: true, render: (r: Row) => (r.spend ? `${((100 * (r.rev180 * margin - r.spend)) / r.spend).toFixed(0)}%` : '—'), sort: (r: Row) => (r.spend ? (r.rev180 * margin - r.spend) / r.spend : 0) },
     ] : []),
-    { key: 'tag', label: 'Call', render: (r) => { const g = tagOf(r, t, hasSpend); return <span className={`ld-tag ${g === 'Too early' ? 'early' : g.toLowerCase()}`}>{g}</span>; }, sort: (r) => tagOf(r, t, hasSpend) },
   ];
 
   const leadCols: Col<number>[] = [
@@ -113,15 +104,16 @@ export default function Campaigns() {
 
   return (
     <Section def={SECTIONS[3]} n={4}>
+      <CampaignPerf budget={budget} />
       <div className="ld-grid">
-        <Card title="Scorecard: scale, fix or kill" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
+        <Card title="Drill down: source → campaign → leads" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
           info={{
-            what: <>Click a source to see its campaigns, then a campaign to see its leads. <b>Rule:</b> under {SMALL_SAMPLE} valid unique leads = Too early. Scale = conversion ≥ {t.conversion_pct}%{hasSpend ? ` and cost per converted ≤ ${inr(t.cost_per_retailer)}` : ''}. Kill = conversion &lt; {t.conversion_pct / 2}%{hasSpend ? ` and cost per converted > ${inr(2 * t.cost_per_retailer)}` : ''}. Everything else = Fix.</>,
+            what: <>Click a source to see its campaigns, then a campaign to see every lead behind it, with its outcome and matched BO retailer. The recommendation for each campaign is in the scorecard above.</>,
             formula: hasSpend ? `CPL = spend ÷ leads; cost/converted = spend ÷ converted; payback = spend ÷ (90-day revenue ÷ 3 × ${t.gross_margin_pct}% margin); 6-month ROI = (6-month revenue × margin − spend) ÷ spend` : 'Conversion = converted ÷ valid unique leads',
             source: 'Lead dump, spend sheet, retailer_month.csv',
           }}
-          csv={{ name: camp !== null ? 'campaign_leads' : src !== null ? 'campaign_scorecard' : 'source_scorecard', rows: () => (camp !== null ? csvRows(leadRows, leadCols) : csvRows(rows, cols).map((r, j) => ({ ...r, Call: tagOf(rows[j], t, hasSpend) }))) }}
-          soWhat={!hasSpend && M.p.hasLeads ? 'No spend loaded: CPL, cost per converted retailer, payback and ROI are skipped; the call uses conversion only.' : undefined}>
+          csv={{ name: camp !== null ? 'campaign_leads' : src !== null ? 'campaign_scorecard' : 'source_scorecard', rows: () => (camp !== null ? csvRows(leadRows, leadCols) : csvRows(rows, cols)) }}
+          soWhat={!hasSpend && M.p.hasLeads ? 'Spend here comes from uploaded spend sheets (none loaded); campaign spend from Meta and Google is in the scorecard above.' : undefined}>
           {!M.p.hasLeads ? <NeedsData what="leads" /> : (
             <>
               <Crumbs items={crumbs} />
@@ -132,6 +124,7 @@ export default function Campaigns() {
           )}
         </Card>
       </div>
+      <DataScope />
     </Section>
   );
 }

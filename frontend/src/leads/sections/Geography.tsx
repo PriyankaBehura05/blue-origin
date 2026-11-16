@@ -1,82 +1,169 @@
+// States & cities. The drill-down IS the State and City filter of the filter bar: clicking a state sets the State filter,
+// clicking a city sets the City filter, so the KPIs, every card here and the Repeat buying page all follow the same place.
+// Path: India -> state -> city -> retailer -> purchase history. Lead figures use mobile-number matches only (repeat.ts).
 import { useMemo, useState } from 'react';
-import { Card, Crumbs, NeedsData, Pct, Section, Table, csvRows, inr, num, useLeads, type Col } from '../ui';
-import { heat } from '../charts';
-import { SECTIONS } from '../sections';
-import { billedIn, health, leadDist, leadOk, NEW, outcomeOf, PENDING, retailerOk, revIn, tierAt } from '../model';
+import { Card, Crumbs, NeedsData, Pct, Table, Section, csvRows, inr, num, useLeads, type Col } from '../ui';
+import { heat, StackedBars } from '../charts';
+import { SECTIONS, SOURCE_NAMES, TIER_COLORS } from '../sections';
+import { health, leadOk, NEW, outcomeOf, PENDING, REACTIVATED, revIn, tierAt } from '../model';
+import { activeRetailers, addRetailer, conversions, emptyStats, endOf, leadInScope, leadPlace, phoneCredit, phoneMatched, type RepeatStats } from '../repeat';
+import { CrossLink, PurchaseHistory, ScopeKpis } from './RepeatParts';
 
-type Level = 'state' | 'city' | 'dist' | 'retailer';
-interface Agg { key: number; name: string; leads: number; conv: number; valid: number; retailers: number; fresh: number; revenue: number }
+type Level = 'state' | 'city' | 'retailer';
+interface Side { leads: number; judged: number; conv: number; retailers: number; repeat: number }
+interface Area {
+  key: number; name: string;
+  leads: number; judged: number; convLeads: number; // leads, judged leads, converted leads (mobile match)
+  conv: number; fresh: number; s: RepeatStats; // converted retailers (one each) and their repeat buying
+  billed: number; sales: number; tiers: number[]; // retailers that bought in the period, their billing and tiers
+  plat: Record<'Meta' | 'Google', Side>;
+}
+const USES = ['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window', 'stage', 'rwin'] as const;
+const MIN_JUDGED = 30;
+const side = (): Side => ({ leads: 0, judged: 0, conv: 0, retailers: 0, repeat: 0 });
+const rate = (k: number, n: number) => (n ? k / n : -1);
 
 export default function Geography() {
-  const { M, f, rg } = useLeads();
-  const [path, setPath] = useState<{ state?: number; city?: number; dist?: number }>({});
-  const level: Level = path.dist !== undefined ? 'retailer' : path.city !== undefined ? 'dist' : path.state !== undefined ? 'city' : 'state';
+  const { M, f, rg, set } = useLeads();
+  const [open, setOpen] = useState<number | null>(null);
+  const level: Level = f.city >= 0 ? 'retailer' : f.state >= 0 ? 'city' : 'state';
+  const groupLevel: 'state' | 'city' = level === 'state' ? 'state' : 'city';
   const R = M.p.retailers;
   const L = M.p.leads;
-  const end = Math.min(rg[1], M.p.salesEnd);
+  const d = M.p.dims;
+  const end = endOf(M, rg);
+  const plats = { Meta: d.source.indexOf('Meta'), Google: d.source.indexOf('Google') };
+  const platOf = (src: number) => (src === plats.Meta ? 'Meta' : src === plats.Google ? 'Google' : null);
+  const nameOf = (k: number) => (k < 0 ? '(not set)' : groupLevel === 'state' ? d.state[k] : d.city[k]);
+  const label = groupLevel === 'state' ? 'State' : 'City';
 
-  const inPath = (s: number, c: number, d: number) =>
-    (path.state === undefined || s === path.state) && (path.city === undefined || c === path.city) && (path.dist === undefined || d === path.dist);
-  const keyAt = (s: number, c: number, d: number) => (level === 'state' ? s : level === 'city' ? c : d);
-  const nameAt = (k: number) => (k < 0 ? '(blank)' : level === 'state' ? M.p.dims.state[k] : level === 'city' ? M.p.dims.city[k] : M.p.dims.dist[k]);
+  const conv = useMemo(() => conversions(M, f, rg), [M, f, rg]);
+  const active = useMemo(() => activeRetailers(M, f, rg), [M, f, rg]);
+  const nOf = useMemo(() => new Map(active.map((x) => [x.r, x.n])), [active]);
+  const credit = phoneCredit(M, f.level, f.window);
 
-  const rows = useMemo(() => {
-    if (level === 'retailer') return [];
-    const by = new Map<number, Agg>();
-    const get = (k: number) => by.get(k) ?? by.set(k, { key: k, name: nameAt(k), leads: 0, conv: 0, valid: 0, retailers: 0, fresh: 0, revenue: 0 }).get(k)!;
-    for (let r = 0; r < M.nR; r++) {
-      if (R.first[r] < 0 || R.first[r] > end || !inPath(R.s[r], R.c[r], R.d[r]) || !retailerOk(M, f, r, end)) continue;
-      const a = get(keyAt(R.s[r], R.c[r], R.d[r]));
-      if (billedIn(M, r, rg[0], rg[1])) a.retailers++;
-      if (R.first[r] >= rg[0] && R.first[r] <= rg[1]) a.fresh++;
-      a.revenue += revIn(M, r, rg[0], rg[1]);
-    }
-    const ret = M.ret[f.level];
+  const areas = useMemo(() => {
+    const by = new Map<number, Area>();
+    const get = (k: number) => by.get(k) ?? by.set(k, { key: k, name: nameOf(k), leads: 0, judged: 0, convLeads: 0, conv: 0, fresh: 0, s: emptyStats(), billed: 0, sales: 0, tiers: new Array(d.tiers.length + 1).fill(0), plat: { Meta: side(), Google: side() } }).get(k)!;
     for (let i = 0; i < M.nL; i++) {
-      if (!L.uniq[i] || !leadOk(M, f, i, rg)) continue;
-      const r = ret[i];
-      const s = L.s[i] >= 0 ? L.s[i] : r >= 0 ? R.s[r] : -1;
-      const c = L.c[i] >= 0 ? L.c[i] : r >= 0 ? R.c[r] : -1;
-      const d = leadDist(M, i, r);
-      if (!inPath(s, c, d)) continue;
-      const a = get(keyAt(s, c, d));
-      a.leads++;
-      if (L.valid[i] && outcomeOf(M, i, f.level, f.window) !== PENDING) a.valid++; // judged leads only
-      if (outcomeOf(M, i, f.level, f.window) === NEW) a.conv++;
+      if (!leadInScope(M, f, i, rg)) continue;
+      const p = leadPlace(M, f.level, i);
+      const a = get(groupLevel === 'state' ? p.s : p.c);
+      const o = outcomeOf(M, i, f.level, f.window);
+      const judged = L.valid[i] && o !== PENDING;
+      const won = judged && (o === NEW || o === REACTIVATED) && phoneMatched(M, f.level, i);
+      a.leads++; if (judged) a.judged++; if (won) a.convLeads++;
+      const pl = platOf(L.src[i]);
+      if (pl) { a.plat[pl].leads++; if (judged) a.plat[pl].judged++; if (won) a.plat[pl].conv++; }
+    }
+    for (const x of conv) {
+      const p = leadPlace(M, f.level, x.lead);
+      const a = get(groupLevel === 'state' ? p.s : p.c);
+      a.conv++;
+      if (x.kind === NEW) a.fresh++;
+      const before = a.s.second;
+      addRetailer(M, a.s, x.r, x.c, f.rwin);
+      const pl = platOf(x.src);
+      if (pl) { a.plat[pl].retailers++; if (a.s.second > before) a.plat[pl].repeat++; }
+    }
+    for (const x of active) {
+      const a = get(groupLevel === 'state' ? R.s[x.r] : R.c[x.r]);
+      a.billed++;
+      a.sales += revIn(M, x.r, rg[0], end);
+      a.tiers[tierAt(M, x.r, end) + 1]++;
     }
     return [...by.values()];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [M, f, rg, path, level]);
+  }, [M, f, rg, conv, active, groupLevel, end]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const retailers = useMemo(() => {
-    if (level !== 'retailer') return [];
-    const out: number[] = [];
-    for (let r = 0; r < M.nR; r++) if (R.first[r] >= 0 && R.first[r] <= end && inPath(R.s[r], R.c[r], R.d[r]) && retailerOk(M, f, r, end)) out.push(r);
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [M, f, rg, path, level]);
+  const down = (k: number) => { if (k < 0) return; set(groupLevel === 'state' ? { state: k, city: -1 } : { city: k }); };
+  const crumbs = [{ label: 'India', onClick: () => set({ state: -1, city: -1 }) }];
+  if (f.state >= 0) crumbs.push({ label: d.state[f.state], onClick: () => set({ city: -1 }) });
+  if (f.city >= 0) crumbs.push({ label: d.city[f.city], onClick: () => undefined });
 
-  const maxLeads = Math.max(1, ...rows.map((r) => r.leads));
-  const maxRet = Math.max(1, ...rows.map((r) => r.retailers));
-  const cols: Col<Agg>[] = [
-    { key: 'name', label: { state: 'State', city: 'City / district', dist: 'Distributor', retailer: '' }[level], render: (r) => r.name, sort: (r) => r.name },
+  const maxLeads = Math.max(1, ...areas.map((a) => a.leads));
+  const tierIdx = d.tiers.map((_, i) => i).filter((i) => i > 0).reverse(); // Platinum .. Yellow
+  const cols: Col<Area>[] = [
+    { key: 'name', label, render: (a) => a.name, sort: (a) => a.name },
     ...(M.p.hasLeads ? [
-      { key: 'leads', label: 'Unique leads', num: true, render: (r: Agg) => <span className="ld-heat-c" style={{ ...heat(r.leads / maxLeads), padding: '1px 6px', borderRadius: 4 }}>{num(r.leads)}</span>, sort: (r: Agg) => r.leads, csv: (r: Agg) => r.leads },
-      { key: 'conv', label: 'Converted', num: true, render: (r: Agg) => num(r.conv), sort: (r: Agg) => r.conv },
-      { key: 'rate', label: 'Conv. %', num: true, render: (r: Agg) => <Pct k={r.conv} n={r.valid} label="Converted ÷ valid unique leads with sales data (pending left out)" />, sort: (r: Agg) => (r.valid ? r.conv / r.valid : 0), csv: (r: Agg) => (r.valid ? ((100 * r.conv) / r.valid).toFixed(2) : '') },
+      { key: 'leads', label: 'Leads', num: true, render: (a: Area) => <span style={{ ...heat(a.leads / maxLeads), padding: '1px 6px', borderRadius: 4 }}>{num(a.leads)}</span>, sort: (a: Area) => a.leads, csv: (a: Area) => a.leads },
+      { key: 'conv', label: 'Converted retailers', num: true, render: (a: Area) => num(a.conv), sort: (a: Area) => a.conv },
+      { key: 'rate', label: 'Conv. %', num: true, render: (a: Area) => <Pct k={a.convLeads} n={a.judged} label="Converted leads ÷ leads that can be judged" />, sort: (a: Area) => rate(a.convLeads, a.judged), csv: (a: Area) => (a.judged ? ((100 * a.convLeads) / a.judged).toFixed(1) : 'N/A') },
+      { key: 'repeat', label: 'Repeat buyers', num: true, render: (a: Area) => num(a.s.second), sort: (a: Area) => a.s.second },
+      { key: 'rrate', label: `Repeat ${f.rwin} mo`, num: true, render: (a: Area) => (a.s.eligible ? <Pct k={a.s.repeatIn} n={a.s.eligible} label={`Bought again within ${f.rwin} months ÷ converted retailers whose window is complete`} /> : <span className="ld-muted">N/A</span>), sort: (a: Area) => rate(a.s.repeatIn, a.s.eligible), csv: (a: Area) => (a.s.eligible ? ((100 * a.s.repeatIn) / a.s.eligible).toFixed(1) : 'N/A') },
+      { key: 'revc', label: 'Revenue, converted', num: true, render: (a: Area) => (a.conv ? inr(a.s.revFirst + a.s.revAfter) : '—'), sort: (a: Area) => a.s.revFirst + a.s.revAfter, csv: (a: Area) => Math.round(a.s.revFirst + a.s.revAfter) },
     ] : []),
-    { key: 'ret', label: 'Retailers billed', num: true, render: (r) => <span style={{ ...heat(r.retailers / maxRet), padding: '1px 6px', borderRadius: 4 }}>{num(r.retailers)}</span>, sort: (r) => r.retailers, csv: (r) => r.retailers },
-    { key: 'fresh', label: 'New retailers', num: true, render: (r) => num(r.fresh), sort: (r) => r.fresh },
-    { key: 'rev', label: 'Sales', num: true, render: (r) => inr(r.revenue), sort: (r) => r.revenue },
-    ...(M.p.hasLeads ? [{ key: 'density', label: 'Leads / 100 retailers', num: true, render: (r: Agg) => (r.retailers ? ((100 * r.leads) / r.retailers).toFixed(0) : r.leads ? '∞' : '—'), sort: (r: Agg) => (r.retailers ? r.leads / r.retailers : r.leads ? 1e9 : 0) }] : []),
+    { key: 'billed', label: 'Retailers billed', num: true, render: (a) => num(a.billed), sort: (a) => a.billed },
+    { key: 'sales', label: 'BO sales in period', num: true, render: (a) => inr(a.sales), sort: (a) => a.sales, csv: (a) => Math.round(a.sales) },
+    { key: 'tiers', label: 'Tier mix', render: (a) => <TierMix t={a.tiers} />, sort: (a) => a.tiers.slice(2).reduce((s, v) => s + v, 0),
+      csv: (a) => tierIdx.map((t) => `${d.tiers[t]} ${a.tiers[t + 1]}`).join(' · ') },
   ];
+
+  // retailer level: the city's retailers that bought in the period
   const rcols: Col<number>[] = [
-    { key: 'name', label: 'Retailer', render: (r) => `${R.name[r]} (${R.id[r]})`, sort: (r) => R.name[r] },
-    { key: 'tier', label: 'Tier', render: (r) => M.p.dims.tiers[tierAt(M, r, end)] ?? '—', sort: (r) => tierAt(M, r, end) },
-    { key: 'health', label: 'Health', render: (r) => health(M, r, end), sort: (r) => health(M, r, end) },
-    { key: 'rev', label: 'Sales in period', num: true, render: (r) => inr(revIn(M, r, rg[0], rg[1])), sort: (r) => revIn(M, r, rg[0], rg[1]) },
-    { key: 'life', label: 'Lifetime', num: true, render: (r) => inr(R.life[r]), sort: (r) => R.life[r] },
+    { key: 'name', label: 'Retailer', render: (r) => R.name[r], sort: (r) => R.name[r] },
+    { key: 'id', label: 'ID', render: (r) => R.id[r], sort: (r) => R.id[r] },
+    { key: 'dist', label: 'Distributor', render: (r) => d.dist[R.d[r]] ?? '—', sort: (r) => d.dist[R.d[r]] ?? '' },
+    { key: 'tier', label: 'Tier', render: (r) => d.tiers[tierAt(M, r, end)] ?? '—', sort: (r) => tierAt(M, r, end) },
+    { key: 'n', label: 'Purchases', num: true, render: (r) => num(nOf.get(r) ?? 0), sort: (r) => nOf.get(r) ?? 0 },
+    { key: 'src', label: 'Brought in by', render: (r) => (credit.lead[r] >= 0 ? SOURCE_NAMES[credit.src[r]] : 'Organic'), sort: (r) => credit.src[r] },
+    { key: 'sales', label: 'Billing in period', num: true, render: (r) => inr(revIn(M, r, rg[0], end)), sort: (r) => revIn(M, r, rg[0], end), csv: (r) => Math.round(revIn(M, r, rg[0], end)) },
+    { key: 'health', label: 'Status', render: (r) => health(M, r, M.p.salesEnd), sort: (r) => health(M, r, M.p.salesEnd) },
     { key: 'phone', label: 'Phone', render: (r) => R.phone[r] || '—', sort: (r) => R.phone[r] },
+  ];
+  const cityRetailers = useMemo(() => (level === 'retailer' ? active.map((x) => x.r) : []), [level, active]);
+
+  // top / low performers: places with enough judged leads, by conversion rate
+  const ranked = areas.filter((a) => a.key >= 0 && a.judged >= MIN_JUDGED).sort((a, b) => b.convLeads / b.judged - a.convLeads / a.judged);
+  const top = ranked.slice(0, 5);
+  const low = ranked.slice(-5).reverse().filter((a) => !top.includes(a));
+  const tierChart = [...areas].filter((a) => a.key >= 0).sort((a, b) => b.billed - a.billed).slice(0, 12)
+    .map((a) => ({ area: a.name, ...Object.fromEntries(tierIdx.map((t) => [d.tiers[t], a.tiers[t + 1]])) }));
+  const platRows = areas.filter((a) => a.plat.Meta.leads + a.plat.Google.leads > 0);
+  const platCols: Col<Area>[] = [
+    { key: 'name', label, render: (a) => a.name, sort: (a) => a.name },
+    ...(['Meta', 'Google'] as const).flatMap((p) => [
+      { key: `${p}l`, label: `${p} leads`, num: true, render: (a: Area) => num(a.plat[p].leads), sort: (a: Area) => a.plat[p].leads },
+      { key: `${p}c`, label: `${p} converted`, num: true, render: (a: Area) => num(a.plat[p].retailers), sort: (a: Area) => a.plat[p].retailers },
+      { key: `${p}r`, label: `${p} conv. %`, num: true, render: (a: Area) => <Pct k={a.plat[p].conv} n={a.plat[p].judged} label={`${p}: converted leads ÷ leads that can be judged`} />, sort: (a: Area) => rate(a.plat[p].conv, a.plat[p].judged), csv: (a: Area) => (a.plat[p].judged ? ((100 * a.plat[p].conv) / a.plat[p].judged).toFixed(1) : 'N/A') },
+      { key: `${p}x`, label: `${p} repeat buyers`, num: true, render: (a: Area) => num(a.plat[p].repeat), sort: (a: Area) => a.plat[p].repeat },
+    ]),
+  ];
+
+  // campaign x place
+  const campGeo = useMemo(() => {
+    if (!M.p.hasLeads) return [];
+    const by = new Map<string, { camp: number; area: number; leads: number; judged: number; convLeads: number; retailers: number; repeat: number; rev: number }>();
+    const get = (camp: number, area: number) => {
+      const k = `${camp}|${area}`;
+      return by.get(k) ?? by.set(k, { camp, area, leads: 0, judged: 0, convLeads: 0, retailers: 0, repeat: 0, rev: 0 }).get(k)!;
+    };
+    for (let i = 0; i < M.nL; i++) {
+      if (!leadInScope(M, f, i, rg) || L.camp[i] < 0) continue;
+      const p = leadPlace(M, f.level, i);
+      const e = get(L.camp[i], groupLevel === 'state' ? p.s : p.c);
+      const o = outcomeOf(M, i, f.level, f.window);
+      e.leads++;
+      if (L.valid[i] && o !== PENDING) { e.judged++; if ((o === NEW || o === REACTIVATED) && phoneMatched(M, f.level, i)) e.convLeads++; }
+    }
+    for (const x of conv) {
+      if (x.camp < 0) continue;
+      const p = leadPlace(M, f.level, x.lead);
+      const e = get(x.camp, groupLevel === 'state' ? p.s : p.c);
+      const s = emptyStats();
+      addRetailer(M, s, x.r, x.c, f.rwin);
+      e.retailers++; e.repeat += s.second; e.rev += s.revFirst + s.revAfter;
+    }
+    return [...by.values()];
+  }, [M, f, rg, conv, groupLevel, L]);
+  type CG = (typeof campGeo)[number];
+  const cgCols: Col<CG>[] = [
+    { key: 'camp', label: 'Campaign', render: (x) => d.campaign[x.camp] ?? '—', sort: (x) => d.campaign[x.camp] ?? '' },
+    { key: 'area', label, render: (x) => nameOf(x.area), sort: (x) => nameOf(x.area) },
+    { key: 'leads', label: 'Leads', num: true, render: (x) => num(x.leads), sort: (x) => x.leads },
+    { key: 'conv', label: 'Converted retailers', num: true, render: (x) => num(x.retailers), sort: (x) => x.retailers },
+    { key: 'rate', label: 'Conv. %', num: true, render: (x) => <Pct k={x.convLeads} n={x.judged} />, sort: (x) => rate(x.convLeads, x.judged), csv: (x) => (x.judged ? ((100 * x.convLeads) / x.judged).toFixed(1) : 'N/A') },
+    { key: 'repeat', label: 'Repeat buyers', num: true, render: (x) => num(x.repeat), sort: (x) => x.repeat },
+    { key: 'rev', label: 'Revenue, converted', num: true, render: (x) => (x.retailers ? inr(x.rev) : '—'), sort: (x) => x.rev, csv: (x) => Math.round(x.rev) },
   ];
 
   const whiteSpace = useMemo(() => {
@@ -88,29 +175,71 @@ export default function Geography() {
       const c = L.c[i] >= 0 ? L.c[i] : ret[i] >= 0 ? R.c[ret[i]] : -1;
       if (c >= 0) leads.set(c, (leads.get(c) ?? 0) + 1);
     }
-    const active = new Map<number, number>();
-    for (let r = 0; r < M.nR; r++) if (R.c[r] >= 0 && health(M, r, end) === 'Active') active.set(R.c[r], (active.get(R.c[r]) ?? 0) + 1);
-    return [...leads.entries()].map(([c, n]) => ({ c, name: M.p.dims.city[c], leads: n, active: active.get(c) ?? 0, tier: M.p.dims.cityTiers[M.p.dims.cityTier[c]] }))
+    const act = new Map<number, number>();
+    for (let r = 0; r < M.nR; r++) if (R.c[r] >= 0 && health(M, r, end) === 'Active') act.set(R.c[r], (act.get(R.c[r]) ?? 0) + 1);
+    return [...leads.entries()].map(([c, n]) => ({ c, name: d.city[c], leads: n, active: act.get(c) ?? 0, tier: d.cityTiers[d.cityTier[c]] }))
       .filter((x) => x.leads >= 10 && x.active <= 2);
-  }, [M, f, rg, L, R, end]);
+  }, [M, f, rg, L, R, end, d]);
 
-  const crumbs = [{ label: 'India', onClick: () => setPath({}) }];
-  if (path.state !== undefined) crumbs.push({ label: M.p.dims.state[path.state] ?? '(blank)', onClick: () => setPath({ state: path.state }) });
-  if (path.city !== undefined) crumbs.push({ label: M.p.dims.city[path.city] ?? '(blank)', onClick: () => setPath({ state: path.state, city: path.city }) });
-  if (path.dist !== undefined) crumbs.push({ label: M.p.dims.dist[path.dist] ?? '(blank)', onClick: () => undefined });
-  const down = (k: number) => setPath(level === 'state' ? { state: k } : level === 'city' ? { ...path, city: k } : { ...path, dist: k });
+  const perfRow = (a: Area) => (
+    <li key={a.key} className="ld-ins-row click" onClick={() => down(a.key)}>
+      <div className="ld-ins-n"><b>{a.name}</b></div>
+      <div className="ld-ins-m">
+        <span>Conv. <b><Pct k={a.convLeads} n={a.judged} /></b></span><span>Leads <b>{num(a.leads)}</b></span>
+        <span>Converted <b>{num(a.conv)}</b></span><span>Repeat <b>{num(a.s.second)}</b></span><span>BO sales <b>{inr(a.sales)}</b></span>
+      </div>
+    </li>
+  );
 
   return (
     <Section def={SECTIONS[7]} n={8}>
+      <ScopeKpis />
+      <div className="ld-related"><span className="ld-muted">Same filters, by tier:</span><CrossLink to="retention" label="Repeat buying & tiers" /></div>
       <div className="ld-grid">
-        <Card title="Leads vs conversions vs retailer base" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
-          info={{ what: 'Click a row to drill down: State → City → Distributor → Retailer. Shading is relative within the column. A lead counts where the lead said it is; without a city, where its matched retailer is. 49% of retailers have no city or district, shown as (blank).', source: 'Lead dump, retailers.csv, retailer_month.csv' }}
-          csv={{ name: `geography_${level}`, rows: () => (level === 'retailer' ? csvRows(retailers, rcols) : csvRows(rows, cols)) }}>
+        <Card title={level === 'retailer' ? `Retailers in ${d.city[f.city]}` : `Leads, conversion, repeat buying and revenue by ${label.toLowerCase()}`} wide uses={[...USES]}
+          info={{ what: <>Click a state, then a city, then a retailer for its purchase history. Clicking sets the State and City filters, so the whole dashboard follows. A lead counts where it said it is; without a city, where its matched retailer is. Converted retailers and repeat buyers use mobile-number matches only, one retailer once. Retailers billed, BO sales and the tier mix cover every BO retailer that bought in the period (tier in the period's last quarter with sales).</>,
+            formula: `conversion = converted leads ÷ leads that can be judged · repeat = 2nd purchase within ${f.rwin} months ÷ converted retailers whose window is complete`, source: 'Lead sheet, BO billing, recomputed tiers' }}
+          csv={{ name: `places_${level}`, rows: () => (level === 'retailer' ? csvRows(cityRetailers, rcols) : csvRows(areas, cols)) }}>
           <Crumbs items={crumbs} />
           {level === 'retailer'
-            ? <Table rows={retailers} cols={rcols} initialSort={{ key: 'rev', dir: 'desc' }} limit={25} />
-            : <Table rows={rows} cols={cols} initialSort={{ key: M.p.hasLeads ? 'leads' : 'rev', dir: 'desc' }} onRow={(r) => down(r.key)} limit={20} />}
+            ? <Table rows={cityRetailers} cols={rcols} initialSort={{ key: 'sales', dir: 'desc' }} limit={25} onRow={(r) => setOpen(r)} empty="No retailer in this city bought in the period with these filters." />
+            : <Table rows={areas} cols={cols} initialSort={{ key: M.p.hasLeads ? 'leads' : 'sales', dir: 'desc' }} onRow={(a) => down(a.key)} limit={20} />}
         </Card>
+        {level !== 'retailer' && M.p.hasLeads && (
+          <Card title={`Top and low-performing ${groupLevel === 'state' ? 'states' : 'cities'}`} uses={[...USES]}
+            info={{ what: `Ranked by lead conversion rate, among places with at least ${MIN_JUDGED} leads that can be judged (fewer is too few to rank fairly). Click one to drill in.` }}>
+            {!ranked.length ? <div className="ld-empty-s">No {groupLevel} has {MIN_JUDGED}+ leads that can be judged for these filters.</div> : (
+              <>
+                <div className="ld-subtle-h">Top</div><ul className="ld-ins">{top.map(perfRow)}</ul>
+                {low.length > 0 && <><div className="ld-subtle-h">Lowest</div><ul className="ld-ins">{low.map(perfRow)}</ul></>}
+              </>
+            )}
+          </Card>
+        )}
+        {level !== 'retailer' && (
+          <Card title={`Retailer tiers by ${groupLevel}`} uses={[...USES]}
+            info={{ what: `Retailers that bought in the period, by their tier in the period's last quarter with sales, for the 12 ${groupLevel === 'state' ? 'states' : 'cities'} with the most such retailers. Untiered retailers are left out of the chart (the table above has the full mix).` }}
+            csv={{ name: `tiers_by_${groupLevel}`, rows: () => areas.map((a) => ({ [label]: a.name, ...Object.fromEntries([0, ...tierIdx].map((t) => [d.tiers[t], a.tiers[t + 1]])) })) }}>
+            {!tierChart.length ? <div className="ld-empty-s">No retailers billed for these filters.</div>
+              : <StackedBars data={tierChart} x="area" fmt={num} height={260} series={tierIdx.map((t) => ({ key: d.tiers[t], label: d.tiers[t], color: TIER_COLORS[t] }))} />}
+          </Card>
+        )}
+        {level !== 'retailer' && M.p.hasLeads && (
+          <Card title={`Meta vs Google by ${groupLevel}`} wide uses={[...USES]}
+            info={{ what: 'Each platform\'s leads, converted retailers (mobile-number match, one retailer once, credited to the converting lead\'s platform), conversion rate and repeat buyers per place. Ad spend is not reported by state or city, so cost figures are N/A here.' }}
+            csv={{ name: `meta_vs_google_by_${groupLevel}`, rows: () => csvRows(platRows, platCols) }}>
+            <Table rows={platRows} cols={platCols} initialSort={{ key: 'Metal', dir: 'desc' }} onRow={(a) => down(a.key)} limit={15} empty="No Meta or Google leads for these filters." />
+          </Card>
+        )}
+        {level !== 'retailer' && M.p.hasLeads && (
+          <Card title={`Campaigns by ${groupLevel}`} wide uses={[...USES]}
+            info={{ what: `Each campaign in each ${groupLevel}: leads, converted retailers, conversion rate, repeat buyers and their revenue. Click a row to filter the dashboard to that campaign and place.` }}
+            csv={{ name: `campaigns_by_${groupLevel}`, rows: () => csvRows(campGeo, cgCols) }}>
+            <Table rows={campGeo} cols={cgCols} initialSort={{ key: 'leads', dir: 'desc' }} limit={15}
+              onRow={(x) => set(groupLevel === 'state' ? { campaign: x.camp, ...(x.area >= 0 ? { state: x.area, city: -1 } : {}) } : { campaign: x.camp, ...(x.area >= 0 ? { city: x.area } : {}) })}
+              empty="No campaign leads for these filters." />
+          </Card>
+        )}
         <Card title="White-space cities" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
           info={{ what: 'Cities with 10 or more valid unique leads but at most 2 active retailers: demand without coverage. Candidates for a new distributor or an ASM visit plan.', source: 'Lead dump, retailers.csv' }}
           csv={{ name: 'white_space_cities', rows: () => whiteSpace.map((w) => ({ City: w.name, 'City tier': w.tier, 'Unique leads': w.leads, 'Active retailers': w.active })) }}>
@@ -124,6 +253,21 @@ export default function Geography() {
           )}
         </Card>
       </div>
+      {open !== null && <PurchaseHistory r={open} onClose={() => setOpen(null)} />}
     </Section>
+  );
+}
+
+/** Platinum .. Yellow counts as a thin stacked bar, with the numbers on hover. */
+function TierMix({ t }: { t: number[] }) {
+  const { M } = useLeads();
+  const d = M.p.dims.tiers;
+  const idx = d.map((_, i) => i).filter((i) => i > 0).reverse();
+  const tot = idx.reduce((s, i) => s + t[i + 1], 0);
+  if (!tot) return <span className="ld-muted">—</span>;
+  return (
+    <span className="ld-tiermix" title={idx.map((i) => `${d[i]} ${t[i + 1]}`).join(' · ') + ` · Untiered ${t[1]}`}>
+      {idx.map((i) => (t[i + 1] ? <i key={i} style={{ flexGrow: t[i + 1], background: TIER_COLORS[i] }} /> : null))}
+    </span>
   );
 }

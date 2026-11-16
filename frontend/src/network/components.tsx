@@ -1,5 +1,5 @@
 // Building blocks of the dashboard pages: pills, KPI cards, charts, tables and the retailer detail panel.
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Drawer } from '@/components/ui';
@@ -21,19 +21,25 @@ export function TierPill({ t }: { t: number | undefined }) {
   );
 }
 
-export function KpiGrid({ kpis }: { kpis: Kpi[] }) {
+export function KpiGrid({ kpis, onList }: { kpis: Kpi[]; onList?: (list: string) => void }) {
   return (
     <div className="net-kpis">
-      {kpis.map((k) => (
-        <div className="card net-kpi" key={k.label}>
+      {kpis.map((k) => {
+        const open = k.list && onList ? () => onList(k.list!) : undefined;
+        return (
+        <div className={`card net-kpi${open ? ' net-kpi-link' : ''}`} key={k.label}
+          {...(open ? { role: 'button', tabIndex: 0, title: 'Open the list of these retailers and distributors, with Excel download', onClick: open,
+            onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } } } : {})}>
           <div className="kpi-label">{k.label}<HelpTip text={k.help} /></div>
           <div className={`net-kpi-value ${k.tone ?? ''}`}>{k.value}</div>
           <div className="net-kpi-sub">
             {k.delta != null && <span className={`net-delta ${k.delta > 0.05 ? 'up' : k.delta < -0.05 ? 'down' : 'flat'}`}>{k.delta >= 0 ? '▲' : '▼'} {Math.abs(k.delta).toFixed(1)}%</span>}
             {k.sub}
           </div>
+          {open && <div className="net-kpi-go">View list &amp; download ›</div>}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -223,7 +229,8 @@ export function NetTable({ t, onOpen, onExport, extra, compact }: {
   const items = virtual ? v.getVirtualItems() : rows.map((_, i) => ({ index: i, start: 0, end: 0, key: i }));
   const padTop = virtual && items.length ? items[0].start : 0;
   const padBot = virtual && items.length ? v.getTotalSize() - items[items.length - 1].end : 0;
-  const shown: Table = { ...t, rows };
+  // the download is what the table shows: its quick search and sort included (and said in the Excel header)
+  const shown: Table = q.trim() ? { ...t, rows, caption: [t.caption, `Quick search “${q.trim()}”: ${fmtN(rows.length)} of ${fmtN(t.rows.length)} rows`].filter(Boolean).join(' · ') } : { ...t, rows };
   const matrixMax = t.matrix ? Math.max(1, ...t.rows.flatMap((r, i) => t.cols.slice(1, -1).map((c, j) => (i === 0 && j === 0 ? 0 : Number(r[c.k]))))) : 1;
   const mBg = (i: number, j: number, val: number) => {
     if (!t.matrix || !val || (i === 0 && j === 0)) return undefined;

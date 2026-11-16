@@ -103,7 +103,7 @@ Include a reconciliation table proving buckets = total.
 4. List of every assumption made and data gap found
 
 ## Addendum (2026-11-09): layout, navigation, interactivity, design, deliverables
-- Single scrolling dashboard: the 12 sections one below another, no tab bar and no tabbed sub-views. Sections now:
+- Single scrolling dashboard: the 15 sections one below another, no tab bar and no tabbed sub-views. Sections now:
   1 Executive cover · 2 Lead funnel & quality · 3 Organic vs marketing · 4 Campaign scorecard · 5 Distributors & field ·
   6 Lead ageing & scoring · 7 Retention & tiers · 8 Geography · 9 Untapped pool · 10 Forecast & what-if ·
   11 Retailer list & actions · 12 Data quality & method.

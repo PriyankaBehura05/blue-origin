@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, MiniSelect, Section, inr, num, pctTxt, useLeads } from '../ui';
 import { StackedBars, Waterfall, heat } from '../charts';
 import { SECTIONS, TIER_COLORS } from '../sections';
+import RepeatBuying from './RepeatBuying';
 import { acquisition, health, ORGANIC, quarterName, quarterShort, retailerOk, revIn, riskRevenue, tierAt } from '../model';
 
 type Group = 'all' | 'mkt' | 'org';
@@ -10,7 +11,7 @@ const RET_USES = ['source', 'campaign', 'state', 'city', 'dist', 'tier', 'level'
 const GROUPS = [{ value: 'all' as Group, label: 'All retailers' }, { value: 'mkt' as Group, label: 'Marketing-acquired' }, { value: 'org' as Group, label: 'Organic' }];
 
 export default function Retention() {
-  const { M, f } = useLeads();
+  const { M, f, rg } = useLeads();
   const navigate = useNavigate();
   const [cohortGroup, setCohortGroup] = useState<Group>('all');
   const [tierGroup, setTierGroup] = useState<Group>('all');
@@ -18,7 +19,7 @@ export default function Retention() {
   const inGroup = (r: number, g: Group) => g === 'all' || (g === 'mkt' ? acq.src[r] !== ORGANIC : acq.src[r] === ORGANIC);
   const qs = M.p.quarters.filter((q) => M.qMonths[q].some((m) => m <= M.p.salesEnd));
   // the waterfall / tier matrix quarter: the period's quarter, else the latest
-  const focusQ = f.period.startsWith('q:') ? f.period.slice(2) : f.period.startsWith('m:') ? M.p.monthQuarter[Number(f.period.slice(2))] : M.latestQuarter;
+  const focusQ = f.period.startsWith('q:') ? f.period.slice(2) : f.period.startsWith('m:') ? M.p.monthQuarter[Number(f.period.slice(2))] : f.period.startsWith('r:') ? M.p.monthQuarter[Math.min(rg[1], M.p.salesEnd)] : M.latestQuarter;
   const qi = qs.indexOf(focusQ);
   const prevQ = qi > 0 ? qs[qi - 1] : null;
   const span = (q: string): [number, number] => [M.qMonths[q][0], M.qMonths[q][M.qMonths[q].length - 1]];
@@ -116,6 +117,7 @@ export default function Retention() {
   const tierNames = ['None', ...M.p.dims.tiers];
   return (
     <Section def={SECTIONS[6]} n={7}>
+      <RepeatBuying />
       <div className="ld-grid">
         <Card title="Revenue: new vs existing retailers" uses={[...RET_USES]}
           info={{ what: 'Each quarter\'s billing split into retailers billing for the first time that quarter (new) and everyone else (existing). Every quarter is shown, so the period filter is not applied.', source: 'retailer_month.csv' }}

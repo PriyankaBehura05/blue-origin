@@ -1,4 +1,4 @@
-// The Lead Generation Dashboard: 12 pages (/leads/<section>), opened from the icon menu in the sidebar, with a sticky
+// The Lead Generation Dashboard: 13 pages (/leads/<section>), opened from the icon menu in the sidebar, with a sticky
 // global filter bar. Data: GET /api/leads/data, loaded once and kept while moving between pages, so filters and unsaved
 // actions carry over; every filter is applied in the browser (model.ts).
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -10,6 +10,7 @@ import { leadsApi } from './api';
 import { buildModel, dayName, defaultFilters, leadQuarters, LEVEL_HELP, LEVEL_NAMES, monthName, ORGANIC, outcomeOf, partialNote, PENDING, periodName, quarterName, quarterShort, rangeOf, type Filters, type Model } from './model';
 import { LeadsCtx, STROKE, makeCtx } from './ui';
 import { SECTIONS, SOURCE_NAMES } from './sections';
+import { REPEAT_WINDOWS, STAGES } from './repeat';
 import type { ActionItem, LeadsPayload, LeadsStatus } from './types';
 import Cover, { type Insight } from './sections/Cover';
 import Funnel from './sections/Funnel';
@@ -19,10 +20,12 @@ import Field from './sections/Field';
 import Ageing from './sections/Ageing';
 import Retention from './sections/Retention';
 import Geography from './sections/Geography';
-import Untapped from './sections/Untapped';
 import Forecast from './sections/Forecast';
 import RetailerList from './sections/RetailerList';
 import Quality from './sections/Quality';
+import Budget from './sections/Budget';
+import Attribution from './sections/Attribution';
+import Platforms from './sections/Platforms';
 import './leads.css';
 
 // earlier addresses -> today's pages
@@ -128,6 +131,8 @@ function Dashboard(props: {
   };
   const view: Record<string, () => JSX.Element> = {
     cover: () => <Cover onAddAction={addAction} />,
+    performance: () => <Cover onAddAction={addAction} view="performance" />,
+    impact: () => <Cover onAddAction={addAction} view="impact" />,
     funnel: () => <Funnel />,
     mix: () => <Mix />,
     campaigns: () => <Campaigns />,
@@ -135,18 +140,21 @@ function Dashboard(props: {
     ageing: () => <Ageing />,
     retention: () => <Retention />,
     geography: () => <Geography />,
-    untapped: () => <Untapped />,
+    untapped: () => <Navigate to="/leads/ageing" replace />,   // merged into Follow-ups & call lists
     forecast: () => <Forecast />,
     retailers: () => <RetailerList actions={props.actions} setActions={props.setActions} save={props.saveActions} saving={props.saving} dirty={props.dirty} />,
+    budget: () => <Budget />,
+    attribution: () => <Attribution />,
+    platforms: () => <Platforms />,
     quality: () => <Quality status={props.status} busy={props.busy} onUpload={props.onUpload} onDelete={props.onDelete} onRebuild={props.onRebuild} onSaveTargets={props.onSaveTargets} onSheets={props.onSheets} />,
   };
 
   return (
     <LeadsCtx.Provider value={ctx}>
       <div className="ld">
-        <FilterBar M={M} f={f} set={set} reset={() => setF({ ...defaultFilters(M), level: f.level, window: f.window })} />
+        {props.page !== 'budget' && <FilterBar M={M} f={f} set={set} reset={() => setF({ ...defaultFilters(M), level: f.level, window: f.window })} />}
         <main className="ld-main">
-          <PeriodNote M={M} f={f} set={set} />
+          {props.page !== 'budget' && <PeriodNote M={M} f={f} set={set} />}
           {view[props.page]()}
         </main>
       </div>
@@ -205,7 +213,7 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
   const leadSources = useMemo(() => new Set(M.p.leads.src.filter((_, i) => M.p.leads.uniq[i])), [M]); // only sources that have leads
   const months = M.p.months.map((_, i) => i).filter((i) => i >= M.leadStart && i <= M.leadEnd).reverse();
 
-  const ADV: (keyof Filters)[] = ['campaign', 'tier', 'outcome', 'level', 'window'];
+  const ADV: (keyof Filters)[] = ['campaign', 'tier', 'outcome', 'level', 'window', 'rwin'];
   const sel = (key: keyof Filters, label: string, options: { v: number | string; l: string }[], opt = true, allLabel?: string) => (
     <select key={key} aria-label={label} title={label} className={`ld-fsel${opt ? ' opt' : ''}${ADV.includes(key) ? ' adv' : ''}${f[key] !== -1 && allLabel ? ' set' : ''}`} value={String(f[key])}
       onChange={(e) => set({ [key]: typeof f[key] === 'number' ? Number(e.target.value) : e.target.value } as Partial<Filters>)}>
@@ -218,20 +226,39 @@ function FilterBar({ M, f, set, reset }: { M: Model; f: Filters; set: (p: Partia
     { v: 'all', l: periodName(M, 'all') },
     ...[...leadQuarters(M)].reverse().map((q) => ({ v: `q:${q}`, l: quarterName(q) + partialNote(M, `q:${q}`) })),
     ...months.map((m) => ({ v: `m:${m}`, l: `Month: ${monthName(M, m)}` })),
+    { v: f.period.startsWith('r:') ? f.period : 'custom', l: f.period.startsWith('r:') ? `Custom: ${periodName(M, f.period)}` : 'Custom month range…' },
   ];
+  // custom range: from / to month, any months of the data (leads or sales)
+  const custom = f.period.startsWith('r:');
+  const [ca, cb] = custom ? rangeOf(M, f.period) : [0, 0];
+  const allMonths = M.p.months.map((_, i) => i);
+  const setRange = (a: number, b: number) => set({ period: `r:${Math.min(a, b)}:${Math.max(a, b)}` });
   return (
     <div className={`ld-filters${more ? ' expanded' : ''}`} role="search" aria-label="Global filters">
       <span className="ld-fi"><Filter size={15} strokeWidth={STROKE} aria-hidden />Filters</span>
-      {sel('period', 'Quarter or month', periodOpts, false)}
+      <select aria-label="Period" title="Quarter, month or a custom month range" className="ld-fsel" value={f.period}
+        onChange={(e) => set({ period: e.target.value === 'custom' ? `r:${Math.max(M.leadStart, M.leadEnd - 2)}:${M.leadEnd}` : e.target.value })}>
+        {periodOpts.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+      {custom && <>
+        <select aria-label="From month" title="From month" className="ld-fsel set" value={ca} onChange={(e) => setRange(Number(e.target.value), cb)}>
+          {allMonths.map((m) => <option key={m} value={m}>From {monthName(M, m)}</option>)}
+        </select>
+        <select aria-label="To month" title="To month" className="ld-fsel set" value={cb} onChange={(e) => setRange(ca, Number(e.target.value))}>
+          {allMonths.map((m) => <option key={m} value={m}>To {monthName(M, m)}</option>)}
+        </select>
+      </>}
       {sel('source', 'Source', SOURCE_NAMES.map((s, i) => ({ v: i, l: s })).filter((o) => o.v !== ORGANIC && leadSources.has(o.v)), true, 'All sources')}
       {sel('state', 'State', idx(d.state).map((x) => ({ v: x.i, l: x.c })), true, 'All states')}
       {sel('city', 'City', sorted(cities).map((x) => ({ v: x.i, l: x.c })), true, 'All cities')}
       {sel('dist', 'Distributor', idx(d.dist).map((x) => ({ v: x.i, l: x.c })), true, 'All distributors')}
       {d.campaign.length > 0 && sel('campaign', 'Campaign', idx(d.campaign).map((x) => ({ v: x.i, l: x.c })), true, 'All campaigns')}
       {sel('tier', 'Tier', d.tiers.map((t, i) => ({ v: i, l: t })).reverse(), true, 'All tiers')}
+      {sel('stage', 'Purchase stage: purchases so far (BO billing months)', STAGES.map((t, i) => ({ v: i, l: t })), true, 'Every purchase stage')}
       {M.p.hasLeads && sel('outcome', 'What happened to the lead', d.outcomes.map((o, i) => ({ v: i, l: o })), true, 'Every result')}
       {sel('level', 'How sure a lead-to-retailer match must be', d.levels.map((_, i) => ({ v: i, l: `Matching: ${LEVEL_NAMES[i] ?? d.levels[i]}` })), true)}
       {sel('window', 'Count a first order within', d.windows.map((w) => ({ v: w, l: `Sale within ${w} days` })), true)}
+      {sel('rwin', 'Repeat purchase window: a second purchase within this many months counts as a repeat', REPEAT_WINDOWS.map((w) => ({ v: w, l: `Repeat within ${w} months` })), true)}
       <button type="button" className="ld-reset ld-filter-more" onClick={() => setMore((x) => !x)} aria-expanded={more}
         title={LEVEL_HELP.join(' · ')}><SlidersHorizontal size={13} strokeWidth={STROKE} />{more ? 'Fewer filters' : 'More filters'}</button>
       <button type="button" className="ld-reset" onClick={reset} title="Clear filters"><RotateCcw size={13} strokeWidth={STROKE} />Reset</button>

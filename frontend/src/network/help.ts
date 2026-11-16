@@ -43,9 +43,9 @@ export function filterHelp(m: Model, f: Filters): Record<string, string> {
     Region: 'Show only retailers whose distributor is in this region. Picking a region also narrows the State and Distributor lists.',
     State: 'Show only retailers whose distributor is in this state. Picking a state narrows the Distributor list.',
     Distributor: 'Show only the retailers of one distributor.',
-    Quarter: 'The quarter every card, chart and table looks at, compared with the quarter before it. “All quarters” shows trends over the whole data; pages that need one quarter then use the latest. Financial-year quarters: Q1 Apr–Jun, Q2 Jul–Sep, Q3 Oct–Dec, Q4 Jan–Mar.',
-    Tier: `Keep only retailers on this tier in the selected quarter (the latest quarter with “All quarters”). “Any tier” means Yellow or above, a quarterly purchase of at least ${fmtSlab(yellow)}.`,
-    Movement: 'Narrow the retailer list to one tier-movement category. The cards, chart and summary still show every category.',
+    Quarter: 'The quarter every card, chart and table looks at, compared with the quarter before it. “All quarters” shows trends over the whole data; pages that need one quarter then use the latest. Tick “Select multiple” to pick several quarters: the Overview then adds them up (and counts consistent retailers as those who bought in every one of them), the Retailer lookup shows only their columns, and the one-quarter pages use the latest selected. Financial-year quarters: Q1 Apr–Jun, Q2 Jul–Sep, Q3 Oct–Dec, Q4 Jan–Mar.',
+    Tier: `Keep only retailers on this tier in the selected quarter (the latest quarter with “All quarters”; with several quarters, on a picked tier in every one of them: a quarter below the slab drops the retailer). Tick “Select multiple” to pick several tiers (e.g. Gold + Platinum): a retailer on any of them is kept, and it may move between them from quarter to quarter. “Any tier” means Yellow or above, a quarterly purchase of at least ${fmtSlab(yellow)}.`,
+    Movement: 'Narrow the retailer list to one tier-movement category, or tick “Select multiple” to pick several (e.g. Upgraded + New). The cards, chart and summary still show every category; the picked ones are highlighted in the chart.',
     Near: `How close to the next tier’s slab a retailer must be to be listed. ${f.near}% means up to ${f.near}% below the slab: for Yellow (${fmtSlab(yellow)}) that is ${fmtINR(yellow * (1 - f.near / 100))} up to just under ${fmtSlab(yellow)}. Allowed: 1–60%.`,
   };
 }
@@ -70,6 +70,15 @@ function kpiRules(page: PageKey, c: Ctx): [RegExp, Text][] {
   switch (page) {
     case 'overview':
       return [
+        ...(f.qs.length > 1 ? [
+          [/^Active retailers$/, 'Retailers who bought something (more than ₹0) in at least one of the selected quarters. Click the card for the list.'],
+          [/^Consistent retailers$/, 'Retailers who bought something (more than ₹0) in every one of the selected quarters. One missed quarter drops a retailer. Click the card for the list.'],
+          [/^Completely new retailers$/, `Retailers whose first-ever purchase with TechnoSport was in one of the selected quarters (${qLabel(m.Q[0])}, the first quarter of data, never counts). Click the card for the list.`],
+          [/^Revenue per active retailer$/, 'Revenue in the selected quarters ÷ retailers who bought in at least one of them.'],
+        ] as [RegExp, Text][] : []),
+        [/^Revenue, selected quarters$/, 'Total purchases by the retailers in your filters in the selected quarters, added up.'],
+        [/^Tiered, every selected quarter$/, `Retailers on a tier (Yellow or above: a quarterly purchase of at least ${yellow}) in each one of the selected quarters. A retailer that dropped below the slab in any of them is left out. Click the card for the list.`],
+        [/^Tiered, any selected quarter$/, `Retailers on any tier (Yellow or above: a quarterly purchase of at least ${yellow}) in at least one of the selected quarters. Click the card for the list.`],
         [/^Revenue, all quarters$/, `Total purchases by the retailers in your filters, over every quarter in the data (${qLabel(m.Q[0])} to ${latest}).`],
         [/ revenue$/, `Total purchases by the retailers in your filters in ${q} (its 3 months added up). ${BADGE}`],
         [/^Total retailers$/, `Every unique retailer (one per shop name and distributor) listed since the data began (${qLabel(m.Q[0])}) up to ${q}, whether or not it has ever bought. It only grows over time. ${all ? 'With “All quarters” this is the latest quarter.' : BADGE}`],

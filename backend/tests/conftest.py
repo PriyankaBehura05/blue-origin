@@ -78,7 +78,12 @@ ADMIN_EMAIL, ADMIN_PASSWORD = "admin@test.local", "admin-pass-123"
 def settings(data_dir) -> Settings:
     return Settings(DATA_DIR=data_dir, DATA_SOURCE="local", ENVIRONMENT="test", MAX_UPLOAD_MB=1,
                     AUTH_SECRET="test-secret", ADMIN_EMAIL=ADMIN_EMAIL, ADMIN_PASSWORD=ADMIN_PASSWORD,
-                    ADMIN_NAME="Test Admin", BO_DATA_FOLDER="")   # tests never use the real .env data folders
+                    ADMIN_NAME="Test Admin", BO_DATA_FOLDER="",   # tests never use the real .env data folders
+                    # ... nor the real ad accounts: a test that needs one sets it itself
+                    META_ACCESS_TOKEN="", META_AD_ACCOUNT_IDS="", GOOGLE_ADS_MODE="off", GOOGLE_ADS_SHEET_URL="",
+                    GOOGLE_ADS_DEVELOPER_TOKEN="", GOOGLE_ADS_CLIENT_ID="", GOOGLE_ADS_CLIENT_SECRET="", GOOGLE_ADS_REFRESH_TOKEN="",
+                    GOOGLE_ADS_CUSTOMER_ID="", GOOGLE_ADS_LOGIN_CUSTOMER_ID="",
+                    ADS_CAMPAIGN_FILTER="")   # every test campaign counts; the GT (YASHA) filter has its own tests
 
 
 @pytest.fixture

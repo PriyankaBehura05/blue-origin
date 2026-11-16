@@ -237,7 +237,7 @@ def test_a_lead_copied_into_another_tab_counts_once_under_its_platform():
     assert leads.loc["9876500009", "source"] == "Other"                  # no platform row for it: kept, not dropped
     assert (leads.loc["9876500001", "f_owner"], leads.loc["9876500002", "f_owner"]) == ("Ravi K", "Meena S")
     assert leads.loc["9876500001", "f_called"] and leads.loc["9876500001", "f_visited"] and not leads.loc["9876500002", "f_visited"]
-    assert "copy" not in leads and "lead_id" not in leads
+    assert "copy" not in leads and "lead_id" in leads    # the lead id stays: attribution looks it up
     steps = {s.step: s for s in log}
     assert (steps["copies of the same lead in another tab counted once"].rows_in,
             steps["copies of the same lead in another tab counted once"].rows_out) == (6, 4)

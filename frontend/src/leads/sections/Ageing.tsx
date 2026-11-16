@@ -1,10 +1,11 @@
+// Follow-ups & call lists (was "Follow-up queue" + "Who to contact next"): the four numbers that matter, the leads to call
+// first, late follow-ups per owner, and the downloadable call lists for open leads and lapsed retailers.
 import { useMemo } from 'react';
-import { Card, NeedsData, Section, Table, csvRows, num, useLeads, type Col } from '../ui';
-import { StackedBars } from '../charts';
+import { AlarmClock, Inbox, PhoneOff, RotateCcw } from 'lucide-react';
+import { Card, Kpi, NeedsData, Section, Table, csvRows, inr, num, useLeads, type Col } from '../ui';
 import { SECTIONS } from '../sections';
-import { health, isOpen, leadAgeDays, leadOk, NEW, outcomeOf, PENDING, wasCalled, type Model } from '../model';
-
-const AGE = [{ label: '0–7 days', max: 7 }, { label: '8–30 days', max: 30 }, { label: '31–60 days', max: 60 }, { label: '60+ days', max: Infinity }];
+import { health, isOpen, leadAgeDays, leadOk, NEW, outcomeOf, PENDING, riskRevenue, wasCalled, type Model } from '../model';
+import { CallLists, useLapsed } from './Untapped';
 const LEAD_USES = ['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window'] as const;
 
 /** Score 0-100 for an open lead: campaign conversion (40), recency (30), we already sell in its city (15), complete details (15). */
@@ -42,6 +43,7 @@ export default function Ageing() {
   const L = M.p.leads;
   const sla = M.p.targets.sla_days ?? 2;
   const scores = useScores(M, f.level, f.window);
+  const lapsed = useLapsed();
 
   const open = useMemo(() => {
     const out: number[] = [];
@@ -49,38 +51,27 @@ export default function Ageing() {
     return out;
   }, [M, f, rg, L]);
 
-  const ageData = useMemo(() => {
-    const rows = AGE.map((a) => ({ label: a.label, contacted: 0, assigned: 0, none: 0 }));
-    for (const i of open) {
-      const age = leadAgeDays(M, i);
-      const row = rows[AGE.findIndex((a) => age <= a.max)];
-      if (wasCalled(M, i)) row.contacted++;
-      else if (L.owner[i] >= 0 || L.fdist[i] >= 0) row.assigned++;
-      else row.none++;
-    }
-    return rows;
-  }, [M, open, L]);
-
+  // with no call date (ASM sheet), a called lead counts as on time
+  const isLate = (i: number) => (L.contact[i] >= 0 ? L.contact[i] - L.day[i] > sla : wasCalled(M, i) ? false : leadAgeDays(M, i) > sla);
   const breaches = useMemo(() => {
-    const by = new Map<string, { owner: string; open: number; breaches: number; oldest: number }>();
+    const by = new Map<string, { owner: string; open: number; breaches: number; notCalled: number; oldest: number }>();
     for (const i of open) {
       const owner = L.owner[i] >= 0 ? M.p.dims.owner[L.owner[i]] : 'Not assigned';
-      const e = by.get(owner) ?? by.set(owner, { owner, open: 0, breaches: 0, oldest: 0 }).get(owner)!;
+      const e = by.get(owner) ?? by.set(owner, { owner, open: 0, breaches: 0, notCalled: 0, oldest: 0 }).get(owner)!;
       e.open++;
-      // with no call date (ASM sheet), a called lead counts as on time
-      const late = L.contact[i] >= 0 ? L.contact[i] - L.day[i] > sla : wasCalled(M, i) ? false : leadAgeDays(M, i) > sla;
-      if (late) e.breaches++;
+      if (isLate(i)) e.breaches++;
+      if (!wasCalled(M, i)) e.notCalled++;
       e.oldest = Math.max(e.oldest, leadAgeDays(M, i));
     }
     return [...by.values()];
-  }, [M, open, L, sla]);
+  }, [M, open, L, sla]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hot = useMemo(() => [...open].sort((a, b) => scores[b] - scores[a]), [open, scores]);
-  const dist = useMemo(() => {
-    const bands = ['0–19', '20–39', '40–59', '60–79', '80–100'].map((label) => ({ label, leads: 0 }));
-    for (const i of open) bands[Math.min(4, Math.floor(scores[i] / 20))].leads++;
-    return bands;
-  }, [open, scores]);
+  const fresh = open.filter((i) => leadAgeDays(M, i) <= 30).length;
+  const notCalled = open.filter((i) => !wasCalled(M, i)).length;
+  const late = breaches.reduce((s, b) => s + b.breaches, 0);
+  const lapsedN = lapsed.reduce((s, g) => s + g.length, 0);
+  const lapsedRev = lapsed.reduce((s, g) => s + g.reduce((x, r) => x + riskRevenue(M, r, M.p.salesEnd), 0), 0);
 
   const hotCols: Col<number>[] = [
     { key: 'score', label: 'Score', num: true, render: (i) => scores[i].toFixed(0), sort: (i) => scores[i] },
@@ -96,41 +87,39 @@ export default function Ageing() {
   ];
 
   return (
-    <Section def={SECTIONS[5]} n={6}>
+    <Section def={SECTIONS.find((s) => s.id === 'ageing')!} n={6}>
+      {M.p.hasLeads && (
+        <div className="ld-kpis ld-kpis-4">
+          <Kpi icon={Inbox} label="Open leads" rag="none" value={num(open.length)} sub={`${num(fresh)} under 30 days old: the best time to convert`}
+            info="Unique leads with a valid mobile that have not turned into a retailer yet (in the period and filters)." />
+          <Kpi icon={PhoneOff} label="Not called yet" rag={notCalled ? 'amber' : 'green'} value={num(notCalled)} sub={open.length ? `${((100 * notCalled) / open.length).toFixed(0)}% of open leads` : undefined}
+            info="Open leads with no call recorded in the follow-up sheet." />
+          <Kpi icon={AlarmClock} label="Late follow-ups" rag={late ? 'red' : 'green'} value={M.p.hasFollowup ? num(late) : '—'} sub={`first contact later than ${sla} days, or none yet`}
+            info={`Open leads whose first contact came more than ${sla} days after the lead, or that are older than ${sla} days with no contact.${M.p.hasContactDates ? '' : ' The ASM sheet has no call dates, so a lead marked Calling Done counts as on time.'}`} />
+          <Kpi icon={RotateCcw} label="Lapsed retailers to win back" rag="none" value={num(lapsedN)} sub={`${inr(lapsedRev)} billed in their last quarter`}
+            info="Retailers with a phone number and no bill for 3 or more months before the last sales month." />
+        </div>
+      )}
       <div className="ld-grid">
-        <Card title="Open leads by age" uses={[...LEAD_USES]}
-          info={{ what: 'Unique leads with a valid mobile that have not converted, by days since the lead (as of the data date), split by follow-up state.', source: 'Lead dump + follow-up log' }}
-          csv={{ name: 'open_leads_by_age', rows: () => ageData.map((r) => ({ Age: r.label, Contacted: r.contacted, 'Assigned, no contact': r.assigned, 'Not assigned': r.none })) }}
-          soWhat={open.length ? <>{num(ageData[0].contacted + ageData[0].assigned + ageData[0].none + ageData[1].contacted + ageData[1].assigned + ageData[1].none)} open leads are under 30 days old: the window where most conversions happen.</> : undefined}>
-          {!M.p.hasLeads ? <NeedsData what="leads" /> : (
-            <StackedBars data={ageData} x="label" fmt={num} series={[
-              { key: 'contacted', label: 'Contacted', color: 'var(--ld-seq-5)' },
-              { key: 'assigned', label: 'Assigned, no contact', color: 'var(--ld-seq-3)' },
-              { key: 'none', label: 'No follow-up recorded', color: 'var(--ld-o-not)' }]} />
-          )}
+        <Card title="Call these first" wide uses={[...LEAD_USES]}
+          info={{ what: 'Open leads, best chance first. Score 0–100: its campaign\'s conversion rate relative to the best campaign (40, small campaigns pulled toward the average), recency (30, zero after 90 days), we already have an active retailer in its city (15), name and pincode given (15). The download has every open lead in score order.', source: 'Lead dump, lead outcomes, retailers' }}
+          csv={{ name: 'call_first', rows: () => csvRows(hot, hotCols) }}>
+          {!M.p.hasLeads ? <NeedsData what="leads" /> : <Table rows={hot} cols={hotCols} limit={15} empty="No open leads for these filters." />}
         </Card>
-        <Card title="SLA breaches by owner" uses={[...LEAD_USES]}
-          info={{ what: `Open leads whose first contact came more than ${sla} days after the lead, or that are older than ${sla} days with no contact.${M.p.hasContactDates ? '' : ' The ASM sheet has no call dates, so a lead marked Calling Done counts as on time.'}`, formula: 'breaches ÷ open leads per owner', source: 'Follow-up log' }}
-          csv={{ name: 'sla_breaches', rows: () => breaches.map((b) => ({ Owner: b.owner, 'Open leads': b.open, Breaches: b.breaches, 'Oldest (days)': b.oldest })) }}>
+        <Card title="Late follow-ups by owner" uses={[...LEAD_USES]}
+          info={{ what: `Open leads per owner, how many are late (first contact after ${sla} days, or none yet) and how many were never called.${M.p.hasContactDates ? '' : ' The ASM sheet has no call dates, so a lead marked Calling Done counts as on time.'}`, source: 'Follow-up log' }}
+          csv={{ name: 'late_followups_by_owner', rows: () => breaches.map((b) => ({ Owner: b.owner, 'Open leads': b.open, Late: b.breaches, 'Not called': b.notCalled, 'Oldest (days)': b.oldest })) }}>
           {!M.p.hasLeads ? <NeedsData what="leads" /> : !M.p.hasFollowup ? <NeedsData what="followup" /> : (
-            <Table rows={breaches} initialSort={{ key: 'b', dir: 'desc' }} cols={[
+            <Table rows={breaches} initialSort={{ key: 'b', dir: 'desc' }} limit={10} cols={[
               { key: 'o', label: 'Owner', render: (b) => b.owner, sort: (b) => b.owner },
               { key: 'n', label: 'Open', num: true, render: (b) => num(b.open), sort: (b) => b.open },
-              { key: 'b', label: 'Breaches', num: true, render: (b) => num(b.breaches), sort: (b) => b.breaches },
+              { key: 'b', label: 'Late', num: true, render: (b) => num(b.breaches), sort: (b) => b.breaches },
+              { key: 'nc', label: 'Not called', num: true, render: (b) => num(b.notCalled), sort: (b) => b.notCalled },
               { key: 'old', label: 'Oldest (days)', num: true, render: (b) => num(b.oldest), sort: (b) => b.oldest },
             ]} />
           )}
         </Card>
-        <Card title="Lead score: who to call first" wide uses={[...LEAD_USES]}
-          info={{ what: 'Score 0–100 for each open lead: its campaign\'s conversion rate relative to the best campaign (40, small campaigns pulled toward the average), recency (30, zero after 90 days), we already have an active retailer in its city (15), name and pincode given (15).', source: 'Lead dump, lead outcomes, retailers' }}
-          csv={{ name: 'hot_leads', rows: () => csvRows(hot, hotCols) }}>
-          {!M.p.hasLeads ? <NeedsData what="leads" /> : (
-            <div className="ld-split">
-              <StackedBars data={dist} x="label" fmt={num} height={200} series={[{ key: 'leads', label: 'Open leads', color: 'var(--ld-seq-4)' }]} />
-              <Table rows={hot} cols={hotCols} limit={10} />
-            </div>
-          )}
-        </Card>
+        <CallLists lapsed={lapsed} />
       </div>
     </Section>
   );

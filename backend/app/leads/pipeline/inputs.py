@@ -29,6 +29,7 @@ ALIASES = {
     "pincode": ["pincode", "pin_code", "pin", "zip", "zip_code", "postal_code"],
     "source": ["source", "lead_source", "platform", "channel", "medium", "utm_source"],
     "campaign": ["campaign", "campaign_name", "utm_campaign"],
+    "campaign_id": ["campaign_id", "utm_campaign_id", "utm_id"],
     "adset": ["ad_set", "adset", "adset_name", "ad_set_name", "ad_group", "adgroup", "ad_group_name"],
     # spend
     "spend": ["spend", "amount_spent", "amount_spent_inr", "amount", "cost", "budget", "spend_inr"],
@@ -54,7 +55,7 @@ ALIASES = {
 
 KINDS = ("leads", "spend", "followup", "targets")
 # short or common words ("retailer", "category") would match unrelated headers by 'contains': exact headers only
-EXACT_ONLY = {"lead_id", "called", "visited", "order_flag", "order_value", "category", "self_existing"}
+EXACT_ONLY = {"campaign_id", "lead_id", "called", "visited", "order_flag", "order_value", "category", "self_existing"}
 
 
 def norm_col(c: object) -> str:

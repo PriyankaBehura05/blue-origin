@@ -90,6 +90,28 @@ class Settings(BaseSettings):
     # Lead Generation dashboard: linked Google Sheets (Data quality page) are re-read this often, with the same key,
     # and the dashboard rebuilt when a tab changed. 0 = only when someone presses "Check now".
     LEADS_SHEETS_MINUTES: int = 10
+    # ---- Ad platforms: read-only campaign reporting (app/ads). Secrets live only here / in the host's environment.
+    META_ACCESS_TOKEN: str = ""            # needs ads_read; a system-user token does not expire
+    META_AD_ACCOUNT_IDS: str = ""          # comma-separated, with or without the "act_" prefix; empty = every account the token can see
+    META_API_VERSION: str = "v23.0"
+    GOOGLE_ADS_DEVELOPER_TOKEN: str = ""   # from the manager account's API Center
+    GOOGLE_ADS_CLIENT_ID: str = ""
+    GOOGLE_ADS_CLIENT_SECRET: str = ""
+    GOOGLE_ADS_REFRESH_TOKEN: str = ""
+    GOOGLE_ADS_CUSTOMER_ID: str = ""       # 10 digits, comma-separated for several; empty = every account the login can see
+    GOOGLE_ADS_LOGIN_CUSTOMER_ID: str = "" # the manager account's ID, when the ad account sits under one
+    GOOGLE_ADS_API_VERSION: str = "v21"
+    # off = Not Connected, no data | sample = made-up campaigns in memory, never saved, never in totals | live = the Google Ads API
+    GOOGLE_ADS_MODE: str = "off"
+    # GOOGLE_ADS_MODE=sheet: the Google Sheet the Google Ads script (backend/docs/google_ads_to_sheet.js) fills every hour
+    GOOGLE_ADS_SHEET_URL: str = ""
+    ADS_CACHE_MINUTES: int = 15            # fetched ad data is kept in memory this long; ?refresh=true skips it
+    # only campaigns whose name contains this text (any case) are fetched and counted: the GT team's YASHA campaigns
+    ADS_CAMPAIGN_FILTER: str = "YASHA"
+    # the Google Ads conversion action counted as a lead (its conversions = leads; other conversion actions are ignored)
+    GOOGLE_ADS_LEAD_CONVERSION: str = "Conversion"
+    ADS_REFRESH_MINUTES: int = 30          # the budget screen (spend, budgets) is re-fetched in the background this often; 0 = only on the admin's Fetch button
+
     # Reference workbook used to fill blank retailer city / pincode / phone (BO_Consolidate_Final.xlsx)
     BO_INFO_FOLDER: str = ""               # e.g. /INFORMATION
 

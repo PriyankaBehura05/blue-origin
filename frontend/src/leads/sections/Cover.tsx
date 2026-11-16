@@ -1,10 +1,24 @@
 import { useMemo } from 'react';
-import { ArrowRight, FileText, IndianRupee, Percent, Phone, Presentation, RefreshCw, Store, TriangleAlert, Wallet } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight, BadgeCheck, FileText, IndianRupee, Inbox, Percent, Phone, PieChart, PiggyBank, Presentation, RefreshCw, RotateCcw, Sparkles, Store, Target, TrendingUp, TriangleAlert, UserCheck, Wallet, type LucideIcon } from 'lucide-react';
 import { Card, Delta, Kpi, NeedsData, Pct, Section, STROKE, inr, num, pctTxt, useLeads, type KpiProps } from '../ui';
 import { Donut, HBars, StackedBars } from '../charts';
 import { categoryColor, OUTCOME_COLORS, SECTIONS, SOURCE_COLORS } from '../sections';
-import { leadOk, monthName, NEW, NOT_CONVERTED, PENDING, REACTIVATED, wasCalled, prevPeriod, rangeOf, ORGANIC, outcomeOf, LEVEL_NAMES, periodMonths, periodName, quarterName, rag, spendIn, wilson, type Filters, type Model, type Range } from '../model';
-import { leadStats, monthlySeries, newPerMonth, retailerStats, runRate } from '../calc';
+import { leadAgg, leadOk, monthName, NEW, NOT_CONVERTED, PENDING, REACTIVATED, wasCalled, prevPeriod, rangeOf, outcomeOf, LEVEL_NAMES, periodMonths, periodName, quarterName, rag, spendIn, wilson, type Filters, type Model, type Range } from '../model';
+import { leadStats, monthlySeries, newPerMonth, reactivatedRevenue, retailerStats, runRate } from '../calc';
+import { LeadFunnel, LeadKpis, useLeadCounts } from './LeadCounts';
+import { adBudgetNow, adSpendIn, NeutralDelta, platformsText, useAdBudget } from '../adSpend';
+import CampaignDetail from './CampaignDetail';
+import CampaignOverview, { Change, HeroPanel, useAcquisitionCards, type HeroCard } from './CampaignOverview';
+import GtCampaigns from './GtCampaigns';
+import PlatformVs from './PlatformVs';
+import PlatformTrends from './PlatformTrends';
+import CampaignMonthly from './CampaignMonthly';
+import CampaignInsights, { PeriodComparison } from './CampaignInsights';
+import { GoogleAnalytics, JumpBar, MetaAnalytics } from './AdsDetail';
+import { useAdDetail } from '../adDetail';
+
+export type CoverView = 'overview' | 'performance' | 'impact';
 
 export interface Insight {
   insight: string;
@@ -118,11 +132,15 @@ export function buildInsights(M: Model, c: ReturnType<typeof useCover>, f: Filte
   return out.slice(0, 5);
 }
 
-export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => void }) {
+export default function Cover({ onAddAction, view = 'overview' }: { onAddAction: (i: Insight) => void; view?: CoverView }) {
   const ctx = useLeads();
   const { M, f, rg } = ctx;
+  const go = useNavigate();
   const c = useCover();
   const insights = useMemo(() => buildInsights(M, c, f, rg), [M, c, f, rg]);
+  const lc = useLeadCounts();
+  const budget = useAdBudget(view === 'overview' || view === 'performance');
+  const detail = useAdDetail(view === 'performance');
   const { L, Lp, S, Sp, t, scale, spend, spendP, rr } = c;
   // no lead here can be judged new-or-not yet (only shops already buying are known): pending, not 0%
   const conv = L.judged && (L.out[NEW] + L.out[NOT_CONVERTED] > 0 || !L.out[PENDING]) ? (100 * L.out[NEW]) / L.judged : null;
@@ -166,6 +184,166 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
       rag: rag(cpr, t.cost_per_retailer, true), ragNote: `Target ≤ ${inr(t.cost_per_retailer)}`, delta: <Delta cur={cpr} prev={cprP} lowerIsBetter />,
       info: 'Marketing spend in the period ÷ new retailers that came from its leads.' });
   }
+
+  // ---- the Overview's eight KPIs: the tiles above, reused, plus lead-generated sales and its share of all BO sales
+  const uniqueTile: KpiProps = { ...tiles[0], label: 'Unique leads' };
+  const convTile: KpiProps = { ...tiles[1], label: 'Lead conversion rate' };
+  // all BO sales, whatever the Source filter: with a source chosen, S.revenue only holds that source's retailers
+  const p1b = prevPeriod(M, f.period);
+  const p2b = p1b ? prevPeriod(M, p1b) : null;
+  const Sbo = useMemo(() => (f.source >= 0 ? retailerStats(M, { ...f, source: -1 }, rg, ctx.prev) : S), [M, f, rg, ctx.prev, S]);
+  const SboP = useMemo(() => (!ctx.prev ? null : f.source >= 0 ? retailerStats(M, { ...f, source: -1 }, ctx.prev, p2b ? rangeOf(M, p2b) : null) : Sp), [M, f, ctx.prev, p2b, Sp]);
+  // lead-attributed revenue = completely new retailers (S.revenueMkt) + reactivated retailers (reactivatedRevenue): one definition everywhere
+  const reAll = useMemo(() => (M.p.hasLeads ? reactivatedRevenue(M, f, rg) : 0), [M, f, rg]);
+  const reAllP = useMemo(() => (M.p.hasLeads && ctx.prev ? reactivatedRevenue(M, f, ctx.prev) : null), [M, f, ctx.prev]);
+  const leadRev = S.revenueMkt + reAll;
+  const leadRevP = Sp && reAllP !== null ? Sp.revenueMkt + reAllP : null;
+  const leadShare = Sbo.revenue ? (100 * leadRev) / Sbo.revenue : null;
+  const leadShareP = SboP && SboP.revenue && leadRevP !== null ? (100 * leadRevP) / SboP.revenue : null;
+  // sales data stops at salesEnd: a period after it has no sales yet (pending, not zero); one that straddles it is only partly in
+  const noSales = rg[0] > M.p.salesEnd;
+  const salesTo = monthName(M, M.p.salesEnd);
+  const pendingSales = <span className="ld-delta none">sales data not in yet</span>;
+  const REV_NOTE = "New retailers: all their BO billing in the period (their first-ever bill came after the lead). Reactivated retailers: their billing from the month of the lead that brought them back. A retailer is never counted in both. Retailers won in earlier periods count too.";
+  const salesTile: KpiProps = { icon: IndianRupee, label: 'Lead-generated sales', value: noSales ? '—' : inr(leadRev), rag: 'none',
+    sub: noSales ? `Pending: sales data runs to ${salesTo}` : `new ${inr(S.revenueMkt)} + reactivated ${inr(reAll)} · of ${inr(Sbo.revenue)} total BO sales${rg[1] > M.p.salesEnd ? ` · sales data to ${salesTo}` : ''}`,
+    delta: noSales ? pendingSales : <Delta cur={leadRev} prev={leadRevP} />,
+    info: `Total lead-attributed revenue: BO billing from retailers the leads brought in, new and reactivated, from every lead source. ${REV_NOTE}` };
+  const contribTile: KpiProps = { icon: PieChart, label: 'Lead-generated sales contribution', value: !noSales && leadShare !== null ? `${leadShare.toFixed(1)}%` : '—', rag: 'none',
+    sub: noSales ? `Pending: sales data runs to ${salesTo}` : `${inr(leadRev)} ÷ ${inr(Sbo.revenue)}`, delta: noSales ? pendingSales : <Delta cur={leadShare} prev={leadShareP} asPoints />,
+    info: 'Lead-generated sales (new + reactivated retailers) as a share of all BO sales in the period.' };
+  // ---- Overview, Campaign Performance: budget, spend, the two lead counts, what a lead costs, the revenue and the return
+  const ad = useMemo(() => adSpendIn(budget, M, f, rg), [budget, M, f, rg]);
+  const adP = useMemo(() => (ctx.prev ? adSpendIn(budget, M, f, ctx.prev) : null), [budget, M, f, ctx.prev]);
+  // leads the spend can be matched to: the connected platforms only (with Meta alone, Meta's leads, not Google's or Print's)
+  const cov = useMemo(() => {
+    if (!M.p.hasLeads || ad.reason) return null;
+    const pick = (i: number) => ad.srcIdx.includes(M.p.leads.src[i]);
+    return { cur: leadAgg(M, f, rg, pick), prev: ctx.prev ? leadAgg(M, f, ctx.prev, pick) : null };
+  }, [M, f, rg, ctx.prev, ad]);
+  const costOk = !ad.reason && ad.unsplit.length === 0 && !!cov;
+  const adPrevOk = !!adP && !adP.reason;
+  // two views of every cost: all campaigns' spend, and only the spend of campaigns whose objective is Leads
+  const per = (spend: number, n: number | undefined) => (spend > 0 && n ? spend / n : null);
+  const cpl = costOk ? per(ad.total, cov!.cur.rows) : null;
+  const cplP = costOk && adPrevOk ? per(adP!.total, cov!.prev?.rows) : null;
+  const cplLead = costOk ? per(ad.leadObjective, cov!.cur.rows) : null;
+  const cplLeadP = costOk && adPrevOk ? per(adP!.leadObjective, cov!.prev?.rows) : null;
+  const cpu = costOk ? per(ad.total, cov!.cur.unique) : null;
+  const cpuP = costOk && adPrevOk ? per(adP!.total, cov!.prev?.unique) : null;
+  const cpuLead = costOk ? per(ad.leadObjective, cov!.cur.unique) : null;
+  const partial = costOk && cov!.cur.rows < L.rows ? ` (${platformsText(ad)} leads only)` : '';
+  const why = ad.reason ?? (ad.unsplit.length ? `Ad spend cannot be split by ${ad.unsplit.join(', ')}` : '');
+  const say = (main: string, detail?: string) => <><div>{main}</div>{detail ? <div className="ld-note">{detail}</div> : null}</>;
+  const SPEND_NOTE = 'Spend is for every campaign on the connected ad account(s), whatever its objective, as last saved on the Ad budget page. Cost per campaign, with each lead linked to its campaign, is on the Campaign attribution page.';
+  const LEAD_NOTE = "Lead campaigns = campaigns whose objective in the ad platform is Leads (Meta's own label). Google Ads campaigns have no objective, so none count as lead campaigns yet.";
+  // budget (today's settings) and revenue, to sit beside the spend
+  const bud = useMemo(() => adBudgetNow(budget, M, f), [budget, M, f]);
+  // revenue paired with the spend: retailers attributed to the platform(s) the spend covers (Meta alone for now), so the
+  // returns compare like with like; with no spend it is simply all lead-attributed revenue
+  const rev = useMemo(() => {
+    if (!M.p.hasLeads) return null;
+    if (ad.reason || !ad.srcIdx.length) return { nw: S.revenueMkt, re: reAll, nwP: Sp?.revenueMkt ?? null, reP: reAllP, covered: false };
+    let nw = 0;
+    let re = 0;
+    let nwP: number | null = ctx.prev ? 0 : null;
+    let reP: number | null = ctx.prev ? 0 : null;
+    for (const src of ad.srcIdx) {
+      const f2 = { ...f, source: src };
+      nw += retailerStats(M, f2, rg, ctx.prev).revenueMkt;
+      re += reactivatedRevenue(M, f2, rg);
+      if (ctx.prev) {
+        nwP! += retailerStats(M, f2, ctx.prev, p2b ? rangeOf(M, p2b) : null).revenueMkt;
+        reP! += reactivatedRevenue(M, f2, ctx.prev);
+      }
+    }
+    return { nw, re, nwP, reP, covered: true };
+  }, [M, f, rg, ctx.prev, ad, S, Sp, reAll, reAllP, p2b]);
+  const tot = rev ? rev.nw + rev.re : null;
+  const totP = rev && rev.nwP !== null && rev.reP !== null ? rev.nwP + rev.reP : null;
+  const ret_ = (spend: number) => (!noSales && costOk && rev?.covered && spend > 0 && tot !== null ? tot / spend : null);
+  const retP_ = (spend: number | undefined) => (costOk && rev?.covered && adPrevOk && spend && totP !== null ? totP / spend : null);
+  const roas = ret_(ad.total);
+  const roasP = retP_(adP?.total);
+  const roasLead = ret_(ad.leadObjective);
+  const roasLeadP = retP_(adP?.leadObjective);
+  const revScope = rev?.covered ? `${platformsText(ad)}-attributed retailers` : 'all lead sources';
+  const partialSales = rg[1] > M.p.salesEnd ? ` · sales data to ${salesTo}` : '';
+  const BUDGET_NOTE = "Budgets are today's settings: Meta and Google do not keep the budget a campaign had in an earlier period, so this does not change with the period. Campaigns on a daily budget and on a lifetime (total) budget are shown separately.";
+  const revCard = (icon: LucideIcon, label: string, v: number | null, vp: number | null, main: string, info: string): KpiProps => ({
+    icon, label, value: v !== null && !noSales ? inr(v) : '—', rag: 'none', delta: noSales ? pendingSales : <Delta cur={v} prev={vp} />,
+    sub: say(main, noSales ? `Pending: sales data runs to ${salesTo}` : `${revScope}${partialSales}`), info,
+  });
+  const adCards: KpiProps[] = [
+    { icon: PiggyBank, label: 'Total ad budget', rag: 'none',
+      value: bud.reason ? '—' : bud.daily ? `${inr(bud.daily)}/day` : bud.lifetime ? inr(bud.lifetime) : '—',
+      sub: say('Budget set on active campaigns today', bud.reason ?? ([bud.lifetimeCampaigns ? `${bud.daily ? '+ ' : ''}${inr(bud.lifetime)} lifetime budgets (${num(bud.lifetimeCampaigns)} campaigns), ${inr(bud.lifetimeLeft)} left` : '',
+      ].filter(Boolean).join(' · ') || 'No budget found on active campaigns')),
+      delta: <span className="ld-delta none">today's settings, not period-specific</span>,
+      info: `Allocated budget of campaigns that are active now (Source filter: that platform only). ${BUDGET_NOTE}` },
+    { icon: Wallet, label: 'Total ad spend', value: ad.reason ? '—' : inr(ad.total), rag: 'none',
+      sub: say('Money spent on ad campaigns in this period', ad.reason ?? `${platformsText(ad)}${ad.leadObjective ? ` · ${inr(ad.leadObjective)} of it on lead campaigns` : ''}${ad.unsplit.length ? ` · not split by ${ad.unsplit.join(', ')}` : ''}`),
+      delta: <NeutralDelta cur={ad.reason ? null : ad.total} prev={adPrevOk ? adP!.total : null} />,
+      info: `Total spent in the months of the selected period (Source filter: that platform only). ${SPEND_NOTE}${ad.fetchedAt ? ` Saved ${ad.fetchedAt.slice(0, 10)}.` : ''}` },
+    { icon: Inbox, label: 'Total lead submissions', value: num(L.rows), rag: 'none', delta: <Delta cur={L.rows} prev={Lp?.rows ?? null} />,
+      sub: say('Every enquiry received, including repeat ones', `${num(Math.max(0, L.rows - L.unique))} repeat enquiries`),
+      info: "Every enquiry received, including the same person enquiring again. After the dashboard's existing clean-up, which removes rows the sheet copied twice (same lead ID)." },
+    { ...uniqueTile, sub: say('Different people, after removing repeat enquiries', 'first enquiry per mobile number') },
+    { icon: Target, label: 'CPL · all campaigns', value: cpl !== null ? inr(cpl) : '—', rag: 'none', delta: <Delta cur={cpl} prev={cplP} lowerIsBetter />,
+      sub: say('All ad spend ÷ total submissions', costOk ? `${inr(ad.total)} ÷ ${num(cov!.cur.rows)} submissions${partial}` : why),
+      info: `Total ad spend (every campaign) ÷ total lead submissions, for the same platform(s) and months. With Meta the only connected platform, All sources uses Meta's submissions, not Google's or Print's. Lower is better. ${SPEND_NOTE}` },
+    { icon: Target, label: 'CPL · lead campaigns', value: cplLead !== null ? inr(cplLead) : '—', rag: 'none', delta: <Delta cur={cplLead} prev={cplLeadP} lowerIsBetter />,
+      sub: say('Lead-campaign spend ÷ total submissions', costOk ? (ad.leadObjective > 0 ? `${inr(ad.leadObjective)} ÷ ${num(cov!.cur.rows)} submissions${partial}` : 'No lead-campaign spend in this period') : why),
+      info: `Spend of lead campaigns only ÷ total lead submissions, for the same platform(s) and months: what a lead costs on the campaigns meant to bring leads. Lower is better. ${LEAD_NOTE}` },
+    { icon: PieChart, label: 'ROAS · all campaigns', value: roas !== null ? `${roas.toFixed(2)}×` : '—', rag: 'none', delta: noSales ? pendingSales : <Delta cur={roas} prev={roasP} />,
+      sub: say('Lead-attributed revenue ÷ all ad spend', noSales ? `Pending: sales data runs to ${salesTo}` : roas !== null ? `${inr(tot!)} ÷ ${inr(ad.total)}` : why || 'Needs ad spend and revenue'),
+      info: `Total lead-attributed revenue (new + reactivated retailers) ÷ total ad spend, same platform(s) and period. Spend covers every campaign, and revenue includes retailers won earlier, so read it as a trend. ${SPEND_NOTE}` },
+    { icon: PieChart, label: 'ROAS · lead campaigns', value: roasLead !== null ? `${roasLead.toFixed(2)}×` : '—', rag: 'none', delta: noSales ? pendingSales : <Delta cur={roasLead} prev={roasLeadP} />,
+      sub: say('Lead-attributed revenue ÷ lead-campaign spend', noSales ? `Pending: sales data runs to ${salesTo}` : roasLead !== null ? `${inr(tot!)} ÷ ${inr(ad.leadObjective)}` : why || 'No lead-campaign spend in this period'),
+      info: `Total lead-attributed revenue (new + reactivated retailers) ÷ the spend of lead campaigns only, same platform(s) and period. ${LEAD_NOTE}` },
+    { icon: UserCheck, label: 'Cost per unique lead', value: cpu !== null ? inr(cpu) : '—', rag: 'none', delta: <Delta cur={cpu} prev={cpuP} lowerIsBetter />,
+      sub: say('All ad spend ÷ unique leads', costOk ? `${inr(ad.total)} ÷ ${num(cov!.cur.unique)} unique leads${partial}${cpuLead !== null ? ` · lead campaigns ${inr(cpuLead)}` : ''}` : why),
+      info: `Total ad spend ÷ unique leads (one per mobile number), for the same platform(s) and months; the lead-campaign figure uses lead-campaign spend only. Lower is better. ${SPEND_NOTE}` },
+    revCard(Sparkles, 'New retailer revenue', rev && rev.nw, rev ? rev.nwP : null, 'BO sales from completely new retailers',
+      `BO billing in the period from retailers whose first-ever bill came after a lead (within the Window), including retailers won earlier. ${REV_NOTE}`),
+    revCard(RotateCcw, 'Reactivated retailer revenue', rev && rev.re, rev ? rev.reP : null, 'BO sales from retailers a lead brought back',
+      `BO billing from retailers that had gone quiet for 3 months and bought again after a lead, counted from the month of that lead. ${REV_NOTE}`),
+    revCard(IndianRupee, 'Total lead-attributed revenue', tot, totP, 'New + reactivated retailer revenue',
+      `New retailer revenue + reactivated retailer revenue. Used for both ROAS figures. ${REV_NOTE}`),
+  ];
+  const sec = (id: string) => ({ def: SECTIONS.find((x) => x.id === id)!, n: SECTIONS.findIndex((x) => x.id === id) + 1 });
+
+  // ---- Overview, BO business impact panel: retailers the leads won, the sales they bring and the return on ad spend
+  const lr = lc?.r;
+  const lrp = lc?.rp ?? null;
+  const pend = <span className="ld-hc-d none">pending: BO sales data not in yet</span>;
+  const acquisition = useAcquisitionCards(budget);
+  const impactCards: HeroCard[] = [
+    { icon: BadgeCheck, tone: 'green', label: 'Converted retailers', value: noSales || !lr ? '—' : num(lr.converted),
+      sub: lr ? `${num(lr.fresh)} completely new + ${num(lr.reactivated)} reactivated` : 'Needs leads',
+      change: noSales ? pend : <Change cur={lr?.converted ?? null} prev={lrp?.converted ?? null} better="up" />,
+      info: 'Distinct BO retailers that a lead brought in: a completely new retailer or a reactivated one. Each retailer is counted once, even if several leads point to it.' },
+    { icon: Sparkles, tone: 'pink', label: 'Completely new retailers', value: noSales || !lr ? '—' : num(lr.fresh),
+      sub: lr && lr.converted ? `${((100 * lr.fresh) / lr.converted).toFixed(0)}% of converted` : 'first-ever BO bill after a lead',
+      change: noSales ? pend : <Change cur={lr?.fresh ?? null} prev={lrp?.fresh ?? null} better="up" />,
+      info: 'Shops whose first-ever BO bill came after a lead (within the Window).' },
+    { icon: RotateCcw, tone: 'teal', label: 'Reactivated retailers', value: noSales || !lr ? '—' : num(lr.reactivated),
+      sub: lr && lr.converted ? `${((100 * lr.reactivated) / lr.converted).toFixed(0)}% of converted` : 'bought again after 3 quiet months',
+      change: noSales ? pend : <Change cur={lr?.reactivated ?? null} prev={lrp?.reactivated ?? null} better="up" />,
+      info: 'Old BO retailers that had not bought for 3 months and ordered again after a lead.' },
+    { icon: IndianRupee, tone: 'violet', label: 'Lead-generated sales', value: noSales ? '—' : inr(leadRev),
+      sub: noSales ? `Pending: sales data runs to ${salesTo}` : `new ${inr(S.revenueMkt)} + reactivated ${inr(reAll)}`,
+      change: noSales ? pend : <Change cur={leadRev} prev={leadRevP} better="up" />,
+      info: `BO billing from retailers the leads brought in, new and reactivated, from every lead source. ${REV_NOTE}` },
+    { icon: PieChart, tone: 'blue', label: 'Share of all BO sales', value: !noSales && leadShare !== null ? `${leadShare.toFixed(1)}%` : '—',
+      sub: noSales ? `Pending: sales data runs to ${salesTo}` : `${inr(leadRev)} of ${inr(Sbo.revenue)} total BO sales`,
+      change: noSales ? pend : <Change cur={leadShare} prev={leadShareP} better="up" points />,
+      info: 'Lead-generated sales (new + reactivated retailers) as a share of all BO sales in the period.' },
+    { icon: TrendingUp, tone: 'amber', label: 'Return on ad spend (ROAS)', value: roas !== null ? `${roas.toFixed(2)}×` : '—',
+      sub: noSales ? `Pending: sales data runs to ${salesTo}` : roas !== null ? `${inr(tot!)} sales ÷ ${inr(ad.total)} ad spend` : why || 'Needs ad spend and sales',
+      change: noSales ? pend : <Change cur={roas} prev={roasP} better="up" />,
+      info: `Sales from retailers the ad platforms' leads brought in (new + reactivated) ÷ total ad spend, same platform(s) and period: sales for each ₹1 spent. Revenue includes retailers won earlier, so read it as a trend. ${SPEND_NOTE}` },
+  ];
 
   // ---- charts: monthly leads by source, what happened, call results, states, ASMs
   const months = lastLead >= 0 ? Array.from({ length: lastLead - Math.max(0, ser.firstLead) + 1 }, (_, j) => Math.max(0, ser.firstLead) + j) : [];
@@ -216,15 +394,43 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
     await pptx.writeFile({ fileName: 'Lead_Gen_Executive_Cover.pptx' });
   };
 
-  return (
-    <Section def={SECTIONS[0]} n={1} actions={
-      <>
-        <button type="button" className="ld-btn" onClick={exportPdf} title="Export the cover to PDF"><FileText size={15} strokeWidth={STROKE} />PDF</button>
-        <button type="button" className="ld-btn" onClick={() => void exportPpt()} title="Export the cover to PowerPoint"><Presentation size={15} strokeWidth={STROKE} />PPT</button>
-      </>
-    }>
-      <div className="ld-kpis">{tiles.map((k) => <Kpi key={k.label} {...k} />)}</div>
-      {!M.p.hasLeads ? <NeedsData what="leads" /> : (
+  const nothing = <NeedsData what="leads" />;
+  if (view === 'performance') {
+    const { def, n } = sec('performance');
+    return (
+      <Section def={def} n={n} actions={
+        <button type="button" className="ld-btn" onClick={() => go('/leads/attribution')} title="Which campaign each lead came from, and what every campaign cost and brought in">
+          <Target size={15} strokeWidth={STROKE} />Campaign attribution<ArrowRight size={14} strokeWidth={STROKE} aria-hidden />
+        </button>}>
+        {!M.p.hasLeads ? nothing : (
+          <>
+            <div className="ld-kpis ld-kpis-hero ld-kpis-4">{adCards.map((k) => <Kpi key={k.label} {...k} />)}</div>
+            <div className="ld-kpis ld-kpis-4">
+              <LeadKpis lc={lc} show={['prospects']} />
+              {tiles.slice(6).map((k) => <Kpi key={k.label} {...k} />)}
+            </div>
+            <JumpBar items={[['cp-campaigns', 'Campaign comparison'], ['cp-trends', 'Performance trends'], ['cp-meta', 'Meta analytics'], ['cp-google', 'Google analytics'], ['cp-detail', 'Spend & lead detail']]} />
+            <div id="cp-campaigns" className="ld-anchor">
+              <GtCampaigns budget={budget} title="Campaign comparison" />
+              <PeriodComparison budget={budget} />
+              <CampaignMonthly budget={budget} />
+            </div>
+            <div id="cp-trends" className="ld-anchor">
+              <h3 className="ld-subhead">Performance trends <span>spend, leads, CPL, reach and revenue, by day, week or month</span></h3>
+              <PlatformTrends budget={budget} />
+            </div>
+            <div id="cp-meta" className="ld-anchor">
+              <h3 className="ld-subhead">Meta detailed analytics <span>ad sets, ads, placements, audience, regions and conversion events</span></h3>
+              <MetaAnalytics budget={budget} detail={detail} />
+            </div>
+            <div id="cp-google" className="ld-anchor">
+              <h3 className="ld-subhead">Google detailed analytics <span>keywords, search terms, devices, geography and conversion actions</span></h3>
+              <GoogleAnalytics detail={detail} />
+            </div>
+            <div id="cp-detail" className="ld-anchor">
+              <h3 className="ld-subhead">Spend and lead detail <span>budgets, spend and returns of the ad accounts, and the leads month by month</span></h3>
+              <CampaignDetail budget={budget} />
+            </div>
         <div className="ld-grid">
           <Card title="Leads each month" wide uses={['source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
             info={{ what: 'New leads (one per mobile number) per month, split by where they came from. Shows every month, whatever period is picked above.', source: 'Lead sheets' }}
@@ -232,6 +438,11 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
             soWhat={months.length ? <>{monthName(M, months.reduce((a, m) => (ser.leads[m] > ser.leads[a] ? m : a), months[0]))} brought the most leads ({num(Math.max(...months.map((m) => ser.leads[m])))}).</> : undefined}>
             <StackedBars data={monthly} x="month" fmt={num} height={230}
               series={srcIdx.map((j) => ({ key: `s${j}`, label: M.p.dims.source[j], color: SOURCE_COLORS[j] }))} />
+          </Card>
+          <Card title="Where the leads came from" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
+            info={{ what: 'Leads in the period by source (Meta, Google, Print …), one per mobile number.', source: 'Lead sheets (the tab name tells the source)' }}>
+            <Donut data={views.sources.map((e) => ({ label: M.p.dims.source[e.j], value: e.n, color: SOURCE_COLORS[e.j] }))} fmt={num}
+              center={<><b>{num(L.unique)}</b><span>leads</span></>} />
           </Card>
           <Card title="What happened to the leads" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
             info={{ what: <>Each lead, checked against BO billing: <b>New retailer</b> = first-ever order within {f.window} days; <b>Came back</b> = an old retailer who had stopped and ordered again; <b>Already buying</b> = was ordering anyway; <b>No sale yet</b>; <b>Invalid number</b>; <b>Pending sales data</b> = the sales data does not reach that far yet, so it is not counted as no sale.</>, source: 'Lead sheets matched to BO sales' }}
@@ -252,12 +463,29 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
             soWhat={views.asms.length ? <>{num(views.unassigned)} leads in this period have no ASM yet.</> : undefined}>
             {!M.p.hasFollowup ? <NeedsData what="followup" /> : <HBars rows={views.asms} fmt={num} />}
           </Card>
-          <Card title="Where the leads came from" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window']}
-            info={{ what: 'Leads in the period by source (Meta, Google, Print …), one per mobile number.', source: 'Lead sheets (the tab name tells the source)' }}>
-            <Donut data={views.sources.map((e) => ({ label: M.p.dims.source[e.j], value: e.n, color: SOURCE_COLORS[e.j] }))} fmt={num}
-              center={<><b>{num(L.unique)}</b><span>leads</span></>} />
-          </Card>
-          <Card title="Which source brings retailers" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
+        </div>
+            <RelatedPages items={[['attribution', 'Campaign attribution'], ['funnel', 'Lead journey'], ['campaigns', 'Campaigns'], ['ageing', 'Follow-ups & call lists'], ['geography', 'States & cities'], ['field', 'Distributors & ASMs']]} />
+          </>
+        )}
+      </Section>
+    );
+  }
+  if (view === 'impact') {
+    const { def, n } = sec('impact');
+    return (
+      <Section def={def} n={n}>
+        {!M.p.hasLeads ? nothing : (
+          <>
+            <div className="ld-kpis ld-kpis-hero">
+              <LeadKpis lc={lc} show={['converted', 'new', 'reactivated']} />
+              <Kpi {...convTile} />
+              <Kpi {...salesTile} />
+              <Kpi {...contribTile} />
+            </div>
+            <div className="ld-kpis">{tiles.slice(2, 6).map((k) => <Kpi key={k.label} {...k} />)}</div>
+            <LeadFunnel lc={lc} />
+        <div className="ld-grid">
+          <Card title="Which source brings retailers" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
             info={{ what: `Share of each source\'s leads that became new retailers (first order within ${f.window} days). Leads pending sales data are left out.`, formula: 'new retailers ÷ leads with sales data' }}
             soWhat={views.sources.some((e) => e.judged < 30) ? <>Sources with under 30 leads with sales data are too small to compare yet.</> : undefined}>
             <HBars fmt={(v) => `${v.toFixed(1)}%`} max={Math.max(1, ...views.sources.map((e) => (e.judged ? (100 * e.k) / e.judged : 0)))}
@@ -289,8 +517,41 @@ export default function Cover({ onAddAction }: { onAddAction: (i: Insight) => vo
             </div>
           </Card>
         </div>
+            <RelatedPages items={[['mix', 'Where retailers come from'], ['retention', 'Repeat buying & tiers'], ['forecast', 'Forecast'], ['retailers', 'Retailers & actions']]} />
+          </>
+        )}
+      </Section>
+    );
+  }
+  return (
+    <Section def={SECTIONS[0]} n={1} actions={
+      <>
+        <button type="button" className="ld-btn" onClick={exportPdf} title="Export the cover to PDF"><FileText size={15} strokeWidth={STROKE} />PDF</button>
+        <button type="button" className="ld-btn" onClick={() => void exportPpt()} title="Export the cover to PowerPoint"><Presentation size={15} strokeWidth={STROKE} />PPT</button>
+      </>
+    }>
+      {!M.p.hasLeads ? nothing : (
+        <>
+          <CampaignOverview budget={budget} />
+          <HeroPanel title="BO" accent="business impact" to="impact" cols={4} cards={[...impactCards, ...acquisition]}
+            subtitle={`What the leads delivered for BO: retailers won and the sales they bring${noSales ? ` · pending: BO sales data runs to ${salesTo}` : rg[1] > M.p.salesEnd ? ` · BO sales data runs to ${salesTo}` : ''}`} />
+          <div className="ld-grid">
+            <PlatformVs budget={budget} />
+          </div>
+          <CampaignInsights budget={budget} />
+        </>
       )}
-      {f.source === ORGANIC && <div className="ld-note">Source = Organic: these retailers did not come from a lead, so lead numbers are empty.</div>}
     </Section>
+  );
+}
+
+/** Links from a summary section to the detailed pages that already exist. */
+function RelatedPages({ items }: { items: [string, string][] }) {
+  const go = useNavigate();
+  return (
+    <div className="ld-related">
+      <span className="ld-note">More detail:</span>
+      {items.map(([to, label]) => <button key={to} type="button" className="ld-btn" onClick={() => go(`/leads/${to}`)}>{label}</button>)}
+    </div>
   );
 }

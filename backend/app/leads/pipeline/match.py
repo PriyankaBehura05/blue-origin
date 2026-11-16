@@ -11,18 +11,33 @@
 
 Only leads with a valid mobile are matched (the rest are 'Unmatchable'). When one number belongs to several retailers,
 the one billed first is taken.
+
+Ambiguous matches go to a manual review queue (`review` column): a loose name match (score 75-89, only in the ceiling
+level) or a phone number shared by several retailers. A reviewer's decision (leads/match_reviews.json, per mobile and
+retailer) is applied here on every build: approved = the match counts at every level from likely up; rejected = no match.
 """
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 LEVELS = ("floor", "likely", "ceiling")
+REVIEW_LOOSE, REVIEW_SHARED = "Loose name match", "Phone shared by several retailers"
 FUZZY_LIKELY = 90
 FUZZY_CEILING = 75
+
+
+def _phone_owners(sales) -> Dict[str, int]:
+    """How many retailers have each phone number (main or alternate)."""
+    n: Dict[str, int] = defaultdict(int)
+    for col in ("phones", "alt_phones"):
+        for phones in sales.retailers[col]:
+            for p in set(phones):
+                n[p] += 1
+    return n
 
 
 def _phone_index(sales, column: str, first: Dict[int, int]) -> Dict[str, int]:
@@ -35,8 +50,9 @@ def _phone_index(sales, column: str, first: Dict[int, int]) -> Dict[str, int]:
     return idx
 
 
-def match(leads: pd.DataFrame, sales) -> pd.DataFrame:
-    """Adds mpass (0 none, 1, 2, 3), conf (0-100) and r_floor / r_likely / r_ceiling (retailer position or -1)."""
+def match(leads: pd.DataFrame, sales, reviews: Optional[List[dict]] = None) -> pd.DataFrame:
+    """Adds mpass (0 none, 1, 2, 3), conf (0-100), r_floor / r_likely / r_ceiling (retailer position or -1), review (why
+    the match needs a person to check it, '' when it does not) and reviewed ('approve' / 'reject' / '')."""
     first = {r: int(a[0]) for r, a in sales.active.items() if len(a)}
     main = _phone_index(sales, "phones", first)
     alt = _phone_index(sales, "alt_phones", first)
@@ -86,4 +102,23 @@ def match(leads: pd.DataFrame, sales) -> pd.DataFrame:
     out["r_floor"] = np.where(pas == 1, ret, -1)
     out["r_likely"] = np.where((pas == 1) | (pas == 2) | ((pas == 3) & (conf >= FUZZY_LIKELY)), ret, -1)
     out["r_ceiling"] = np.where(pas > 0, ret, -1)
+    owners = _phone_owners(sales)
+    out["review"] = [REVIEW_LOOSE if p == 3 and c < FUZZY_LIKELY else
+                     REVIEW_SHARED if p in (1, 2) and owners.get(m, 0) > 1 else ""
+                     for p, c, m in zip(pas, conf, leads["mobile"])]
+    out["reviewed"] = ""
+    out["r_cand"] = ret          # the candidate retailer, kept when a reviewer rejects it
+    if reviews:
+        pos = {rid: i for i, rid in enumerate(sales.retailers["Retailer_ID"])}
+        decided = {(str(d.get("mobile")), pos.get(str(d.get("retailer_id")))): d.get("decision") for d in reviews}
+        for i, (mob, r) in enumerate(zip(out["mobile"], ret)):
+            d = decided.get((mob, int(r))) if r >= 0 else None
+            if d == "approve":
+                out.iat[i, out.columns.get_loc("r_likely")] = r
+                out.iat[i, out.columns.get_loc("r_ceiling")] = r
+            elif d == "reject":
+                for c in ("r_floor", "r_likely", "r_ceiling"):
+                    out.iat[i, out.columns.get_loc(c)] = -1
+            if d in ("approve", "reject"):
+                out.iat[i, out.columns.get_loc("reviewed")] = d
     return out

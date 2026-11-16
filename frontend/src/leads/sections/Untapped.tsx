@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { MessageCircle, PhoneCall, Footprints } from 'lucide-react';
-import { Card, ExportBtn, NeedsData, Section, STROKE, downloadCsv, inr, num, useLeads } from '../ui';
+// Call lists of the Follow-ups & call lists page (Ageing.tsx): not-converted leads by city tier and age, each cell with its
+// channel and a download, and lapsed retailers to win back by their last tier.
+import { Card, ExportBtn, NeedsData, STROKE, downloadCsv, inr, num, useLeads } from '../ui';
 import { heat } from '../charts';
-import { SECTIONS } from '../sections';
 import { health, isOpen, lastBilledUpTo, leadAgeDays, leadOk, monthName, outcomeOf, retailerOk, riskRevenue, tierAt } from '../model';
 
 const RECENCY = [{ label: '0–30 days', max: 30 }, { label: '31–90 days', max: 90 }, { label: '91–180 days', max: 180 }, { label: '180+ days', max: Infinity }];
@@ -23,7 +24,25 @@ function ChannelTag({ c }: { c: Channel }) {
   return <span className="ld-tag" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}><I size={12} strokeWidth={STROKE} aria-hidden />{c}</span>;
 }
 
-export default function Untapped() {
+/** Lapsed (Churned) retailers with a phone number, grouped by the tier they last billed at. */
+export function useLapsed() {
+  const { M, f } = useLeads();
+  const R = M.p.retailers;
+  return useMemo(() => {
+    const end = M.p.salesEnd;
+    const groups = M.p.dims.tiers.map(() => [] as number[]);
+    for (let r = 0; r < M.nR; r++) {
+      if (!R.phone[r] || health(M, r, end) !== 'Churned' || !retailerOk(M, f, r, end, ['tier'])) continue;
+      const last = lastBilledUpTo(M, r, end);
+      const t = Math.max(0, tierAt(M, r, last));
+      if (f.tier >= 0 && t !== f.tier) continue;
+      groups[t].push(r);
+    }
+    return groups;
+  }, [M, f, R]);
+}
+
+export function CallLists({ lapsed }: { lapsed: number[][] }) {
   const { M, f, rg } = useLeads();
   const L = M.p.leads;
   const R = M.p.retailers;
@@ -40,19 +59,6 @@ export default function Untapped() {
     return cells;
   }, [M, f, rg, L, T]);
 
-  const lapsed = useMemo(() => {
-    const end = M.p.salesEnd;
-    const groups = M.p.dims.tiers.map(() => [] as number[]);
-    for (let r = 0; r < M.nR; r++) {
-      if (!R.phone[r] || health(M, r, end) !== 'Churned' || !retailerOk(M, f, r, end, ['tier'])) continue;
-      const last = lastBilledUpTo(M, r, end);
-      const t = Math.max(0, tierAt(M, r, last));
-      if (f.tier >= 0 && t !== f.tier) continue;
-      groups[t].push(r);
-    }
-    return groups;
-  }, [M, f, R]);
-
   const leadList = (idx: number[], channel: Channel) => idx.map((i) => ({
     Name: L.name[i], Mobile: L.mob[i], City: L.c[i] >= 0 ? M.p.dims.city[L.c[i]] : '', Pincode: L.pin[i], State: L.s[i] >= 0 ? M.p.dims.state[L.s[i]] : '',
     Source: M.p.dims.source[L.src[i]], Campaign: M.p.dims.campaign[L.camp[i]] ?? '', 'Lead date': new Date(L.day[i] * 86400000).toISOString().slice(0, 10),
@@ -67,10 +73,9 @@ export default function Untapped() {
   const total = seg.flat().reduce((s, c) => s + c.length, 0);
   const maxCell = Math.max(1, ...seg.flat().map((c) => c.length));
   return (
-    <Section def={SECTIONS[8]} n={9}>
-      <div className="ld-grid">
-        <Card title="Not-converted leads: city tier × recency" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
-          info={{ what: 'Valid unique leads that have not converted (JustDial and business-repository contacts arrive through the lead dump with their source), by city tier and days since the lead. Each cell shows the recommended channel; the arrow downloads its call / blast list.',
+    <>
+        <Card title="Call lists: open leads by city tier and age" wide uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level', 'window']}
+          info={{ what: 'Valid unique leads that have not converted, by city tier and days since the lead. Each cell shows the recommended channel; the arrow downloads its call / blast list.',
             formula: 'Channel rule: 0–30 days → ASM visit in Tier 1–2 cities, AI voice call elsewhere; 31–90 days → AI voice call; over 90 days → WhatsApp blast',
             source: 'Lead dump, lead outcomes; city tiers: Tier 1 = 9 metros, Tier 2 = HRA "Y" cities' }}
           csv={{ name: 'untapped_leads_all', rows: () => seg.flatMap((row, t) => row.flatMap((cell, b) => leadList(cell, channelFor(t, b)))) }}
@@ -121,7 +126,6 @@ export default function Untapped() {
             </tbody>
           </table>
         </Card>
-      </div>
-    </Section>
+    </>
   );
 }

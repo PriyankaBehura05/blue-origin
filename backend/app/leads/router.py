@@ -1,7 +1,7 @@
 """Lead Generation API: all routes under /api/leads (mounted in app/api/router.py behind sign-in)."""
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
 from pydantic import BaseModel
 
 from app.api.deps import DataRepository, current_user, get_repository
@@ -61,6 +61,36 @@ def reconciliation(repo: DataRepository = Depends(get_repository)):
 def memo(repo: DataRepository = Depends(get_repository)):
     return Response(svc.output(repo.store, "memo.md"), media_type="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": 'inline; filename="Lead_Gen_Findings_Memo.md"'})
+
+
+@router.get("/campaign-performance", response_model=ApiResponse[dict],
+            summary="Campaign and platform KPIs for a month range: spend, unique leads, CPL, conversion, new retailers, "
+                    "cost per new retailer, budget utilisation, attributed revenue, ROAS, rankings and scores")
+def campaign_performance(start: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$", description="YYYY-MM; default = first month"),
+                         end: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$", description="YYYY-MM; default = last month"),
+                         level: str = Query("likely", pattern="^(floor|likely|ceiling)$"), window: int = Query(60),
+                         repo: DataRepository = Depends(get_repository)):
+    if window not in (30, 60, 90):
+        raise InvalidFileError("window must be 30, 60 or 90.")
+    return ApiResponse(data=svc.campaign_performance(repo.store, start, end, level, window))
+
+
+class ReviewBody(BaseModel):
+    mobile: str
+    retailer_id: str
+    decision: str
+
+
+@router.get("/match-reviews", response_model=ApiResponse[List[dict]], summary="Decisions taken on ambiguous lead -> retailer matches")
+def match_reviews(repo: DataRepository = Depends(get_repository)):
+    return ApiResponse(data=svc.get_reviews(repo.store))
+
+
+@router.put("/match-reviews", response_model=ApiResponse[List[dict]], summary="Approve or reject one ambiguous match ('clear' undoes it); the next build applies it")
+def save_match_review(body: ReviewBody, repo: DataRepository = Depends(get_repository), user: dict = Depends(current_user)):
+    if body.decision not in ("approve", "reject", "clear"):
+        raise InvalidFileError("decision must be approve, reject or clear.")
+    return ApiResponse(data=svc.save_review(repo.store, body.mobile, body.retailer_id, body.decision, user.get("email")))
 
 
 class ActionsBody(BaseModel):

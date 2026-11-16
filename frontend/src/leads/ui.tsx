@@ -1,36 +1,19 @@
 // Building blocks of the lead dashboard: cards, KPI tiles, percentages with their fraction and CI, tables with CSV
 // export, icon toggles, breadcrumbs. Icons: lucide line icons, one stroke weight, coloured only for status.
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowRight, ArrowUp, ChevronRight, Download, FilterX, type LucideIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { HelpTip } from '@/components/HelpTip';
 import { Sparkline } from './charts';
+import { SECTIONS, trailOf } from './sections';
 import { formatINR, formatNumber } from '@/utils/format';
-import {
-  activeFilters, FILTER_LABELS, prevPeriod, rangeOf, wilson, SMALL_SAMPLE,
-  type FilterKey, type Filters, type Model, type Rag, type Range,
-} from './model';
+import { activeFilters, FILTER_LABELS, wilson, SMALL_SAMPLE, type FilterKey, type Rag } from './model';
 
 export const STROKE = 1.75;
 
-// ---- context: the model and the global filters ---------------------------------------------------------------------
-export interface Ctx {
-  M: Model;
-  f: Filters;
-  set: (patch: Partial<Filters>) => void;
-  rg: Range;
-  prev: Range | null;
-  canEdit: boolean;
-}
-export const LeadsCtx = createContext<Ctx | null>(null);
-export function useLeads(): Ctx {
-  const c = useContext(LeadsCtx);
-  if (!c) throw new Error('useLeads outside the lead dashboard');
-  return c;
-}
-export function makeCtx(M: Model, f: Filters, set: Ctx['set'], canEdit: boolean): Ctx {
-  const p = prevPeriod(M, f.period);
-  return { M, f, set, rg: rangeOf(M, f.period), prev: p ? rangeOf(M, p) : null, canEdit };
-}
+// ---- context: the model and the global filters (in context.tsx, so editing this file never makes a second context) -----
+export { LeadsCtx, makeCtx, useLeads, type Ctx } from './context';
+import { useLeads } from './context';
 
 // ---- formatting ----------------------------------------------------------------------------------------------------
 export const num = (n: number) => formatNumber(n);
@@ -316,6 +299,7 @@ export function Section({ def, n, actions, children }: { def: { id: string; icon
   const Icon = def.icon;
   return (
     <section id={def.id} className="ld-sec" aria-labelledby={`${def.id}-h`}>
+      <PageTrail id={def.id} />
       <header className="ld-sec-h">
         <span className="ld-sec-ico"><Icon size={20} strokeWidth={STROKE} aria-hidden /></span>
         <div>
@@ -327,4 +311,12 @@ export function Section({ def, n, actions, children }: { def: { id: string; icon
       {children}
     </section>
   );
+}
+
+/** Where a detail page sits under the Overview (Overview › Campaign performance › Campaign attribution), each step a link. */
+export function PageTrail({ id }: { id: string }) {
+  const go = useNavigate();
+  const trail = trailOf(id);
+  if (trail.length < 2) return null;
+  return <Crumbs items={trail.map((t) => ({ label: SECTIONS.find((s) => s.id === t)!.title, onClick: () => go(`/leads/${t}`) }))} />;
 }

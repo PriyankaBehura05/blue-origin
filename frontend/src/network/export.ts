@@ -80,7 +80,7 @@ export async function exportXlsx(tables: Table[], stamp: string, filters: string
     ws.getCell(1, 1).alignment = { horizontal: 'left', vertical: 'middle' };
     ws.getRow(1).height = 24;
     for (let c = 1; c <= n; c++) ws.getCell(1, c).border = { bottom: { style: 'medium', color: { argb: 'FF808080' } } };
-    ws.getCell(2, 1).value = [t.caption, `Filters: ${filters}`, `Revenue in ₹`, `Generated ${generated}`].filter(Boolean).join('  •  ');
+    ws.getCell(2, 1).value = [t.caption, `Filters: ${t.scope ?? filters}`, `Revenue in ₹`, `Generated ${generated}`].filter(Boolean).join('  •  ');
     ws.getCell(2, 1).font = { name: FONT, size: 9, italic: true, color: { argb: 'FF777777' } };
     if (n > 1) {
       ws.mergeCells(1, 1, 1, n);

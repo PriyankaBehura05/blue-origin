@@ -92,7 +92,7 @@ def build_payload(sales, leads: pd.DataFrame, spend: pd.DataFrame, follow: pd.Da
     L: Dict[str, list] = {k: [] for k in ("day", "m", "src", "camp", "adset", "s", "c", "pin", "mob", "name", "valid",
                                           "uniq", "pass", "conf", "rf", "rl", "rc", "o", "gap", "owner", "fdist",
                                           "contact", "status", "called", "visited", "ordered", "ordv", "selfEx",
-                                          "zdist")}
+                                          "zdist", "att", "meth")}
     for row in leads.itertuples(index=False):
         L["day"].append(row.date.toordinal() - EPOCH)
         L["m"].append(N.month_int(row.date) - m0)
@@ -127,6 +127,8 @@ def build_payload(sales, leads: pd.DataFrame, spend: pd.DataFrame, follow: pd.Da
         L["ordv"].append(_f(row.f_value))
         L["selfEx"].append(int(row.f_self))
         L["zdist"].append(int(by_pin.get(row.pin, by_city.get(row.city_key, -1))) if row.pin or row.city_key else -1)
+        L["att"].append(int(getattr(row, "att_status", 1)))      # attribution.STATUSES: Matched, Unmatched, Non-paid
+        L["meth"].append(int(getattr(row, "att_method", -1)))    # attribution.METHODS, -1 when not matched
 
     sp = {"camp": [], "m": [], "v": []}
     for row in spend.itertuples(index=False):

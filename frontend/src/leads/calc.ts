@@ -1,6 +1,6 @@
 // Calculations shared by several sections (cover, forecast, distributors, memo-style insights).
 import {
-  acquisition, billedIn, health, lastBilledUpTo, leadAgg, leadOk, NEW, ORGANIC, retailerOk, revIn, riskRevenue,
+  acquisition, billedIn, health, lastBilledUpTo, leadAgg, leadOk, NEW, ORGANIC, outcomeOf, REACTIVATED, retailerOk, revIn, riskRevenue,
   type Filters, type LeadAgg, type Model, type Range,
 } from './model';
 
@@ -120,4 +120,32 @@ export function monthlySeries(M: Model, f: Filters) {
   }
   const firstLead = leads.findIndex((v) => v > 0);
   return { leads, bySrc, sales, firstLead };
+}
+
+/** BO billing in the period from retailers a lead reactivated (they had bought before, went quiet for 3 months, and bought
+ *  again after the lead, within the Window). Only billing from the month of the reactivating lead on counts: before it the
+ *  retailer was BO's own customer, not the lead's. A retailer a lead brought in as completely new (acquisition) is never
+ *  counted here, so new + reactivated never double-counts. Source and campaign are those of the earliest reactivating lead;
+ *  state, city, distributor and tier are the retailer's, as everywhere else. */
+export function reactivatedRevenue(M: Model, f: Filters, rg: Range): number {
+  const L = M.p.leads;
+  const ret = M.ret[f.level];
+  const acq = acquisition(M, f.level, f.window);
+  const lead = new Map<number, number>();
+  for (let i = 0; i < M.nL; i++) {
+    if (outcomeOf(M, i, f.level, f.window) !== REACTIVATED) continue;
+    const r = ret[i];
+    if (r < 0 || acq.lead[r] >= 0) continue;
+    const cur = lead.get(r);
+    if (cur === undefined || L.day[i] < L.day[cur]) lead.set(r, i);
+  }
+  const end = Math.min(rg[1], M.p.salesEnd);
+  let s = 0;
+  for (const [r, i] of lead) {
+    if (f.source >= 0 && L.src[i] !== f.source) continue;
+    if (f.campaign >= 0 && L.camp[i] !== f.campaign) continue;
+    if (!retailerOk(M, f, r, end, ['source', 'campaign'])) continue;
+    s += revIn(M, r, Math.max(rg[0], L.m[i]), rg[1]);
+  }
+  return s;
 }

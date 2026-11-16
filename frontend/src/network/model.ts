@@ -103,7 +103,22 @@ export function moveOf(r: Retailer, qi: number): Move | null {
   return 'Never been on tier but some sales';
 }
 // The tier filter uses the selected quarter's tier, or the latest quarter's with "All quarters".
+// With several quarters selected a retailer is kept only when it was on a picked tier in every one of them.
 export const tierFor = (m: Model, f: Filters, r: Retailer) => tierAt(r, qSel(m, f));
+/** The selected quarters when more than one is selected, else null */
+export const multiQ = (f: Filters) => (f.qs && f.qs.length > 1 ? f.qs : null);
+// several tiers picked: a retailer on any of them is kept
+const tierOk = (m: Model, f: Filters, ti: number) => f.tier.some((t) => (t === 'tiered' ? ti > 0 : m.TIERS[ti] === t));
+/** 'All tiers', 'Any tier', 'Gold tier', 'Gold + Silver tiers' */
+export const tierText = (f: Filters) => {
+  const names = f.tier.map((t) => (t === 'tiered' ? 'Any tier' : t));
+  return !names.length ? 'All tiers' : names.length === 1 ? (f.tier[0] === 'tiered' ? 'Any tier' : `${names[0]} tier`) : `${names.join(' + ')} tiers`;
+};
+/** Quarter part of the filter text: 'All quarters', 'Q2 FY 27 (Jul–Sep 2026)', or 'Q1 FY 27 + Q2 FY 27' */
+export const quarterText = (m: Model, f: Filters) => {
+  const mq = multiQ(f);
+  return mq ? mq.map((i) => qLabel(m.Q[i])).join(' + ') : f.q < 0 ? 'All quarters' : qLong(m.Q[f.q]);
+};
 
 export function applyFilters(m: Model, f: Filters) {
   return m.R.filter(
@@ -111,7 +126,7 @@ export function applyFilters(m: Model, f: Filters) {
       (!f.region || r.region === f.region) &&
       (!f.state || r.state === f.state) &&
       (!f.dist || r.dist === f.dist) &&
-      (!f.tier || (f.tier === 'tiered' ? tierFor(m, f, r) > 0 : m.TIERS[tierFor(m, f, r)] === f.tier)),
+      (!f.tier.length || (multiQ(f) ? multiQ(f)!.every((qi) => tierOk(m, f, tierAt(r, qi))) : tierOk(m, f, tierFor(m, f, r)))),
   );
 }
 
@@ -121,8 +136,8 @@ export function filterText(m: Model, f: Filters, quarterLabel?: string) {
     f.region ? `${f.region} region` : 'All regions',
     f.state || 'All states',
     f.dist || 'All distributors',
-    quarterLabel ?? (f.q < 0 ? 'All quarters' : qLong(m.Q[f.q])),
-    f.tier ? (f.tier === 'tiered' ? 'Any tier' : `${f.tier} tier`) : 'All tiers',
+    quarterLabel ?? quarterText(m, f),
+    tierText(f),
   ].join(' · ');
 }
 

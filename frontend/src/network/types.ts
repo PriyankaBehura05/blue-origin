@@ -83,6 +83,7 @@ export interface Table {
   rows: Row[];
   matrix?: boolean;
   total?: boolean; // summary table: the Excel download gets a TOTAL row
+  scope?: string; // the filters this table was built with, written in its Excel header (overrides the page's)
   help?: string;
 }
 export interface Kpi {
@@ -92,6 +93,7 @@ export interface Kpi {
   sub?: string;
   tone?: 'up' | 'down';
   help?: string;
+  list?: string; // clicking the card opens this retailer list (network/reports.ts kpiSets)
 }
 export interface Series {
   name: string;
@@ -139,9 +141,10 @@ export interface Filters {
   region: string;
   state: string;
   dist: string;
-  q: number; // -1 = all quarters
-  tier: string; // '' | 'tiered' | tier name
+  q: number; // -1 = all quarters, else the selected quarter (the latest one when several are selected)
+  qs: number[]; // the selected quarters, oldest first; [] = all quarters
+  tier: string[]; // [] = all tiers, else any of: 'tiered' (Yellow or above) or tier names
   m: number; // month index (New retailers)
   near: number; // % of next slab (Upgrade pipeline)
-  mv: string; // tier movement category (Tier movement), '' = all
+  mv: string[]; // tier movement categories (Tier movement), [] = all
 }

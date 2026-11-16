@@ -1,17 +1,23 @@
 import { useMemo, useState } from 'react';
-import { CalendarDays, Layers, Megaphone, Sigma } from 'lucide-react';
-import { Card, type Col, IconToggle, NeedsData, Pct, Section, Table, csvRows, num, useLeads, Bar as InBar } from '../ui';
+import { HelpTip } from '@/components/HelpTip';
+import { CalendarDays, Clock, Layers, Megaphone, PhoneCall, Percent, Sigma, Trophy, Users, Waypoints } from 'lucide-react';
+import { Card, type Col, Delta, IconToggle, Kpi, NeedsData, Pct, Section, Table, csvRows, num, pctTxt, useLeads, Bar as InBar } from '../ui';
 import { Lines, StackedBars } from '../charts';
 import { OUTCOME_COLORS, SECTIONS, SOURCE_COLORS } from '../sections';
-import { boOrderCheck, EXISTING, leadAgg, leadOk, monthName, NEW, outcomeOf, REACTIVATED, wasCalled, type LeadAgg } from '../model';
+import { EXISTING, leadAgg, leadOk, monthName, NEW, outcomeOf, REACTIVATED, type LeadAgg } from '../model';
+import { journeyAgg, STAGES } from '../journey';
+import { useAdBudget } from '../adSpend';
+import JourneyAsm from './JourneyAsm';
+import DataExceptions from './DataExceptions';
 
 type Group = 'total' | 'source' | 'campaign' | 'month';
 const LEAD_USES = ['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'outcome', 'level', 'window'] as const;
 
 export default function Funnel() {
-  const { M, f, rg } = useLeads();
+  const { M, f, rg, prev } = useLeads();
   const [group, setGroup] = useState<Group>('source');
   const L = M.p.leads;
+  const budget = useAdBudget(M.p.hasLeads);
 
   const rows = useMemo(() => {
     if (!M.p.hasLeads) return [];
@@ -95,29 +101,59 @@ export default function Funnel() {
     return { ttfo, decay: { rows: decay, srcs: bySrc.map((s, j) => ({ j, n: s.n })).filter((s) => s.n > 0) } };
   }, [M, f, rg, L]);
 
-  // field follow-up: unique leads with a valid mobile -> called -> visited -> order reported -> seen in BO billing
-  const field = useMemo(() => {
-    const st = [0, 0, 0, 0, 0];
+  // lead funnel: Generated -> Assigned -> Contacted -> Interested -> Converted -> First purchase (journey.ts)
+  const jr = useMemo(() => (M.p.hasLeads ? journeyAgg(M, f, rg) : null), [M, f, rg]);
+  const jrP = useMemo(() => (M.p.hasLeads && prev ? journeyAgg(M, f, prev) : null), [M, f, prev]);
+  const glance = useMemo(() => {
+    if (!M.p.hasLeads) return null;
+    const bySrc = new Map<number, number>();
+    const byOwner = new Map<number, Set<number>>();
+    const ret = M.ret[f.level];
     for (let i = 0; i < M.nL; i++) {
-      if (!L.uniq[i] || !L.valid[i] || !leadOk(M, f, i, rg)) continue;
-      st[0]++;
-      if (!wasCalled(M, i)) continue;
-      st[1]++;
-      if (L.visited?.[i] === 1) st[2]++;
-      if (L.ordered?.[i] === 1) {
-        st[3]++;
-        if (boOrderCheck(M, i, f.level) === 'billed') st[4]++;
+      if (!L.uniq[i] || !leadOk(M, f, i, rg)) continue;
+      bySrc.set(L.src[i], (bySrc.get(L.src[i]) ?? 0) + 1);
+      if (L.owner[i] >= 0 && ret[i] >= 0 && outcomeOf(M, i, f.level, f.window) === NEW) {
+        const set = byOwner.get(L.owner[i]) ?? byOwner.set(L.owner[i], new Set()).get(L.owner[i])!;
+        set.add(ret[i]);
       }
     }
-    return [
-      { s: 'Unique leads (valid mobile)', v: st[0] }, { s: 'Called', v: st[1] }, { s: 'Visited', v: st[2] },
-      { s: 'Order reported by ASM', v: st[3] }, { s: 'Retailer billed in BO', v: st[4] },
-    ];
+    const topSrc = [...bySrc.entries()].sort((a, b) => b[1] - a[1])[0];
+    const topAsm = [...byOwner.entries()].map(([o, set]) => [o, set.size] as const).sort((a, b) => b[1] - a[1])[0];
+    return { topSrc, topAsm };
   }, [M, f, rg, L]);
+  const STAGE_INFO = [
+    'Unique leads: the first enquiry per mobile number.',
+    'Leads with an ASM (ASM NAME on the lead sheet, or the follow-up log).',
+    'Assigned leads the ASM called (Calling Done = yes, or a contact date).',
+    'Contacted leads that showed interest: a visit, an order reported, or a positive call result (Interested, Catalogue sent, Distributor visit ...).',
+    'Interested leads where the ASM reports an order (Order Placed = yes, or call result Converted).',
+    "Converted leads that BO confirms: the retailer's first-ever bill came after the lead, within the Window.",
+  ];
+  const ratio = (k: number, n: number) => (n ? (100 * k) / n : null);
 
   const max = total ? Math.max(1, total.rows) : 1;
   return (
     <Section def={SECTIONS[1]} n={2}>
+      {jr && glance && (
+        <div className="ld-kpis">
+          <Kpi icon={Percent} label="Overall lead conversion rate" rag="none" value={pctTxt(jr.converted, jr.judged)}
+            sub={`${num(jr.converted)} converted of ${num(jr.judged)} leads with sales data`}
+            delta={<Delta cur={ratio(jr.converted, jr.judged)} prev={jrP ? ratio(jrP.converted, jrP.judged) : null} asPoints />}
+            info="Converted leads (BO confirms a new retailer or one that came back) / unique leads that can be judged against BO sales." />
+          <Kpi icon={Users} label="Leads in this period" rag="none" value={num(jr.stages[0])} sub="unique leads (first enquiry per mobile)"
+            delta={<Delta cur={jr.stages[0]} prev={jrP ? jrP.stages[0] : null} />} info="Different people who enquired in the selected period." />
+          <Kpi icon={PhoneCall} label="Contact rate" rag="none" value={pctTxt(jr.stages[2], jr.stages[1])} sub={`${num(jr.stages[2])} called of ${num(jr.stages[1])} assigned`}
+            delta={<Delta cur={ratio(jr.stages[2], jr.stages[1])} prev={jrP ? ratio(jrP.stages[2], jrP.stages[1]) : null} asPoints />}
+            info="Assigned leads the ASM called / assigned leads." />
+          <Kpi icon={Clock} label="Follow-up pending" rag="none" value={num(jr.pending)} sub="assigned, working number, not called yet"
+            delta={<Delta cur={jr.pending} prev={jrP ? jrP.pending : null} lowerIsBetter />} info="Leads with an ASM and a working number that have not been called and have not converted." />
+          <Kpi icon={Waypoints} label="Top lead source" rag="none" value={glance.topSrc ? M.p.dims.source[glance.topSrc[0]] : '-'}
+            sub={glance.topSrc ? `${num(glance.topSrc[1])} leads, ${pctTxt(glance.topSrc[1], jr.stages[0], 0)} of all` : ''} info="The source that brought the most unique leads in the period." />
+          <Kpi icon={Trophy} label="Top ASM by new retailers" rag="none" value={glance.topAsm ? M.p.dims.owner[glance.topAsm[0]] : '-'}
+            sub={glance.topAsm ? `${num(glance.topAsm[1])} new retailers from their leads` : 'No new retailer from ASM leads yet'}
+            info="The ASM whose leads produced the most distinct new retailers (first-ever BO bill after the lead)." />
+        </div>
+      )}
       <div className="ld-grid">
         <Card title="From enquiry to first order" wide uses={[...LEAD_USES]}
           info={{ what: 'Each step a lead goes through: enquiry → one per mobile number → a working number → found in the BO sales data → first order (a new retailer) → ordered again in another month.', formula: 'each % = this step ÷ the step before', source: 'Lead sheets matched to BO sales' }}
@@ -144,26 +180,25 @@ export default function Funnel() {
             </>
           )}
         </Card>
-        <Card title="Field follow-up funnel" uses={[...LEAD_USES]}
-          info={{ what: 'What happened after the lead, as the ASMs record it on the lead sheet (Calling Done, Visit Done, Order Placed), with the last step checked in the BO sales data: the matched retailer billed in the lead month or the 2 months after. Visited and ordered are counted among called leads.', formula: 'each stage ÷ the stage before (visited ÷ called, order ÷ called, billed ÷ orders)', source: 'Lead sheet ASM columns + BO retailer_month.csv' }}
-          csv={{ name: 'field_funnel', rows: () => field.map((s) => ({ Stage: s.s, Leads: s.v })) }}
-          soWhat={field[0].v ? <>{num(field[1].v)} of {num(field[0].v)} leads were called; {num(field[4].v)} of {num(field[3].v)} reported orders show up in BO billing.</> : undefined}>
-          {!M.p.hasFollowup ? <NeedsData what="followup" /> : (
-            <table className="ld-table">
-              <tbody>
-                {field.map((s, j, a) => {
-                  const base = j === 0 ? null : j === 1 ? a[0] : j === 4 ? a[3] : a[1];
-                  return (
-                    <tr key={s.s}>
-                      <td style={{ width: 200 }}>{s.s}</td>
-                      <td className="num" style={{ width: 80 }}>{num(s.v)}</td>
-                      <td className="num" style={{ width: 80 }}>{base ? <Pct k={s.v} n={base.v} label={`${s.s} ÷ ${base.s}`} /> : ''}</td>
-                      <td><InBar value={s.v} max={Math.max(1, a[0].v)} /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <Card title="Lead funnel" uses={[...LEAD_USES]}
+          info={{ what: 'Generated, Assigned, Contacted, Interested, Converted, First purchase. Each stage counts the leads that passed the one before; the % is of the stage before. The last stage is confirmed in BO billing, so it connects advertising to the follow-up of the sales team and to real orders.',
+            formula: 'each % = this stage / the stage before', source: 'Lead sheets (ASM columns) + BO sales' }}
+          csv={{ name: 'lead_funnel_asm', rows: () => (jr ? STAGES.map((st, j) => ({ Stage: st, Leads: jr.stages[j], 'Of previous %': j && jr.stages[j - 1] ? ((100 * jr.stages[j]) / jr.stages[j - 1]).toFixed(1) : '' })) : []) }}
+          soWhat={jr && jr.firstPurchaseOther ? <>{num(jr.firstPurchaseOther)} more leads became new retailers without a recorded call or order: the ASM columns miss part of the follow-up.</> : undefined}>
+          {!M.p.hasFollowup || !jr ? <NeedsData what="followup" /> : (
+            <div className="ld-fnl">
+              {STAGES.map((st, j) => {
+                const v = jr.stages[j];
+                const w = jr.stages[0] ? Math.max(14, (100 * v) / jr.stages[0]) : 14;
+                return (
+                  <div key={st} className="ld-fnl-row">
+                    <span className="ld-fnl-l">{st} <HelpTip text={STAGE_INFO[j]} /></span>
+                    <span className="ld-fnl-track"><span className={`ld-fnl-bar s${j}`} style={{ width: `${w}%` }}>{num(v)}</span></span>
+                    <span className="ld-fnl-p">{j ? <Pct k={v} n={jr.stages[j - 1]} label={`${st} / ${STAGES[j - 1]}`} /> : <span className="ld-muted">100%</span>}</span>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Card>
         <Card title="People who enquired more than once" uses={['period', 'source', 'campaign', 'state', 'city', 'dist', 'tier', 'level']}
@@ -198,6 +233,8 @@ export default function Funnel() {
               series={decay.srcs.map((s) => ({ key: `s${s.j}`, label: `${M.p.dims.source[s.j]} (n=${num(s.n)})`, color: SOURCE_COLORS[s.j] }))} />
           )}
         </Card>
+        {M.p.hasFollowup && <JourneyAsm />}
+        {M.p.hasLeads && <DataExceptions budget={budget} />}
       </div>
     </Section>
   );

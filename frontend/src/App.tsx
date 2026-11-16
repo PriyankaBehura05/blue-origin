@@ -23,6 +23,7 @@ export default function App() {
         <Route path="dashboard" element={<NetworkLayout />}>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path=":tab" element={<NetworkPage />} />
+          <Route path=":tab/:list" element={<NetworkPage />} />
         </Route>
         <Route path="leads" element={<LeadsPage />} />
         <Route path="leads/:page" element={<LeadsPage />} />

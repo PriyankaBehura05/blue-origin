@@ -2,7 +2,8 @@
 
     <store>/leads/inbox/      lead dumps, spend, follow-up log, targets (CSV / Excel) - dropped here by people
     <store>/leads/sheets/     the same, copied from linked Google Sheets every few minutes (sheets_source.py)
-    <store>/leads/out/        dashboard.json.gz, reconciliation.xlsx, memo.md, build.json (fingerprint + time)
+    <store>/leads/out/        dashboard.json.gz, campaign_facts.json.gz, reconciliation.xlsx, memo.md, build.json
+    <store>/ads/budget/, ads/attribution/   ad spend, campaigns and daily delivery (app/ads), only ever read here
     <store>/leads/actions.json, targets.json   edited in the dashboard
     <store>/network/          the BO Dashboard's outputs, only ever read here
 
@@ -32,9 +33,12 @@ from . import sheets_source as sheets
 
 log = logging.getLogger("blue_origin.leads")
 
-PIPELINE_VERSION = "8"   # 8: copies of a lead in another tab counted once
+PIPELINE_VERSION = "11"  # 11: daily impressions, clicks and leads per campaign; 10: daily spend; 9: lead -> campaign attribution
 INBOX, OUT, NETWORK = "leads/inbox", "leads/out", "network"
+AD_FOLDERS = ("ads/budget", "ads/attribution")   # saved by app/ads: a new fetch rebuilds the lead data
+PLATFORM_FILES = {"Meta": "meta.json.gz", "Google": "google.json.gz"}
 ACTIONS, TARGETS = "leads/actions.json", "leads/targets.json"
+REVIEWS = "leads/match_reviews.json"     # approve / reject decisions on ambiguous lead -> retailer matches
 RECHECK_SECONDS = 60
 INBOX_TYPES = (".csv", ".xlsx", ".xls", ".xlsm")
 
@@ -63,7 +67,9 @@ def fingerprint(store: BlobStore) -> str:
     sales = sorted((posixpath.basename(f.path), f.version or str(f.size)) for f in store.list(NETWORK)
                    if posixpath.basename(f.path) in SALES_FILES)
     targets = store.read(TARGETS) or b""
-    raw = json.dumps([PIPELINE_VERSION, inbox, sales, hashlib.sha1(targets).hexdigest()])
+    ads = sorted((f.path, f.version or str(f.size)) for folder in AD_FOLDERS for f in store.list(folder))
+    reviews = store.read(REVIEWS) or b""
+    raw = json.dumps([PIPELINE_VERSION, inbox, sales, hashlib.sha1(targets).hexdigest(), ads, hashlib.sha1(reviews).hexdigest()])
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
@@ -73,15 +79,47 @@ def _build(store: BlobStore, fp: str) -> None:
     if sales.get("retailers.csv") is None or sales.get("retailer_month.csv") is None:
         raise DataNotAvailableError("The BO Dashboard data (network/retailers.csv, retailer_month.csv) is not built yet.")
     started = time.time()
-    res = run(inbox, sales, target_overrides=_json(store, TARGETS, {}))
+    res = run(inbox, sales, target_overrides=_json(store, TARGETS, {}), ads=_ad_data(store),
+              reviews=_json(store, REVIEWS, []))
     body = gzip.compress(json.dumps(res.payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     store.write(f"{OUT}/dashboard.json.gz", body)
     store.write(f"{OUT}/reconciliation.xlsx", res.reconciliation)
+    store.write(f"{OUT}/campaign_facts.json.gz", gzip.compress(json.dumps(res.facts or {}, separators=(",", ":")).encode("utf-8")))
     store.write(f"{OUT}/memo.md", res.memo.encode("utf-8"))
     store.write(f"{OUT}/build.json", json.dumps({
         "fingerprint": fp, "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seconds": round(time.time() - started, 1), "inbox": sorted(inbox), "lead_rows": len(res.payload["leads"]["day"]),
     }, indent=2).encode())
+
+
+def _ad_data(store: BlobStore) -> dict:
+    """The saved ad data (budget screen + daily delivery) per platform, None where nothing is saved yet."""
+    def one(folder: str, name: str):
+        try:
+            raw = store.read(f"{folder}/{name}")
+            return json.loads(gzip.decompress(raw)) if raw else None
+        except Exception as exc:   # a file being replaced right now: the next build reads it
+            log.warning("Lead build: could not read %s/%s: %s", folder, name, exc)
+            return None
+    return {"budget": {p: one("ads/budget", n) for p, n in PLATFORM_FILES.items()},
+            "delivery": {p: one("ads/attribution", n) for p, n in PLATFORM_FILES.items()}}
+
+
+def campaign_performance(store: BlobStore, start: Optional[str], end: Optional[str], level: str, window: int) -> dict:
+    """KPIs of the months start..end ('YYYY-MM'; default = the whole span) from the last build's campaign facts."""
+    from .spend_service import performance
+    fp, _ = ensure_built(store, wait=False)
+    if _cache.get("facts_fp") != fp:
+        raw = store.read(f"{OUT}/campaign_facts.json.gz")
+        _cache.update(facts=json.loads(gzip.decompress(raw)) if raw else {}, facts_fp=fp)
+    facts = _cache["facts"]
+    if not facts:
+        raise DataNotAvailableError("No campaign data yet: the lead data has to be built with lead rows first.")
+    months = sorted({m for _, m, _, _ in facts["spend"]} | {r[1] for rows in facts["leads"].values() for r in rows})
+    to_m = lambda ym: int(ym[:4]) * 12 + int(ym[5:7]) - 1  # noqa: E731
+    s = to_m(start) if start else months[0]
+    e = to_m(end) if end else months[-1]
+    return performance(facts, min(s, e), max(s, e), level, window)
 
 
 def _display(path: str) -> str:
@@ -237,6 +275,21 @@ def save_actions(store: BlobStore, items: List[dict], user: Optional[str]) -> Li
     clean = [{**it, "updatedBy": it.get("updatedBy") or user, "updatedAt": it.get("updatedAt") or now} for it in items]
     store.write(ACTIONS, json.dumps(clean, indent=2, ensure_ascii=False).encode("utf-8"))
     return clean
+
+
+def get_reviews(store: BlobStore) -> List[dict]:
+    return _json(store, REVIEWS, [])
+
+
+def save_review(store: BlobStore, mobile: str, retailer_id: str, decision: str, user: Optional[str]) -> List[dict]:
+    """Record one decision ('approve' / 'reject'; 'clear' removes it). The next build applies it."""
+    items = [d for d in get_reviews(store) if not (d.get("mobile") == mobile and d.get("retailer_id") == retailer_id)]
+    if decision != "clear":
+        items.append({"mobile": mobile, "retailer_id": retailer_id, "decision": decision, "by": user,
+                      "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    store.write(REVIEWS, json.dumps(items, indent=1).encode("utf-8"))
+    _cache.pop("checked", None)
+    return items
 
 
 def get_targets(store: BlobStore) -> dict:

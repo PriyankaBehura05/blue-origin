@@ -1,0 +1,2 @@
+# Google OAuth client secrets: never commit
+client_secret*.json

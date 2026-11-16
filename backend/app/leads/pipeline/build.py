@@ -49,6 +49,7 @@ class Result:
     payload: dict
     reconciliation: bytes
     memo: str
+    facts: Optional[dict] = None    # campaign facts for services/spend_service.performance
 
 
 def _gaps(inp: I.Inputs, sales, leads, spend, follow, found_targets) -> List[str]:
@@ -87,6 +88,47 @@ def _gaps(inp: I.Inputs, sales, leads, spend, follow, found_targets) -> List[str
     return g
 
 
+def _ad_daily(delivery: dict) -> dict:
+    """Daily campaign delivery of the kept campaigns (display names) for the trend charts:
+    {"campaigns": [name, ...], "platforms": [Meta | Google, ...], "rows": [[campaign index, day (days since 1970-01-01), spend,
+    impressions, clicks, leads as the platform reports them], ...]}."""
+    names: List[str] = []
+    plats: List[str] = []
+    rows = []
+    for plat, saved in (delivery or {}).items():
+        if not saved:
+            continue
+        info = {str(c["campaign_id"]): c.get("name") or "" for c in saved.get("campaigns", [])}
+        for r in saved.get("daily", []):
+            name = info.get(str(r.get("campaign_id")))
+            spend, leads = float(r.get("spend") or 0), float(r.get("leads") or 0)
+            if not name or (spend <= 0 and leads <= 0):
+                continue
+            if name not in names:
+                names.append(name)
+                plats.append(plat)
+            rows.append([names.index(name), date.fromisoformat(r["date"]).toordinal() - date(1970, 1, 1).toordinal(), round(spend, 2),
+                         int(r.get("impressions") or 0), int(r.get("clicks") or 0), round(leads, 2)])
+    return {"campaigns": names, "platforms": plats, "rows": rows}
+
+
+def _review_queue(leads: pd.DataFrame, sales, limit: int = 2000) -> List[dict]:
+    """Ambiguous lead -> retailer matches for a person to approve or reject: one per mobile (its first lead), newest first."""
+    q = leads[(leads["review"] != "") & leads["unique"]]
+    r = sales.retailers
+    out = []
+    for row in q.sort_values("date", ascending=False).head(limit).itertuples(index=False):
+        pos = int(row.r_cand)
+        if pos < 0:
+            continue
+        out.append({"mobile": row.mobile, "date": row.date.isoformat(), "lead_name": row.name, "lead_city": row.city_name,
+                    "lead_pin": row.pin, "source": row.source, "reason": row.review, "score": int(row.conf),
+                    "retailer_id": r["Retailer_ID"].iat[pos], "retailer_name": r["Retailer_Name"].iat[pos].strip(),
+                    "retailer_city": r["city_name"].iat[pos], "retailer_pin": r["pin"].iat[pos],
+                    "decision": row.reviewed})
+    return out
+
+
 def _workbook(sheets: Dict[str, pd.DataFrame]) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as xw:
@@ -101,7 +143,11 @@ def _workbook(sheets: Dict[str, pd.DataFrame]) -> bytes:
 
 
 def run(inbox: Dict[str, bytes], sales_files: Dict[str, bytes], target_overrides: Optional[dict] = None,
-        today: Optional[date] = None) -> Result:
+        today: Optional[date] = None, ads: Optional[dict] = None, reviews: Optional[List[dict]] = None) -> Result:
+    """ads: {'budget': {'Meta': ads/budget snapshot or None, 'Google': ...}, 'delivery': {...ads/attribution...}}, read
+    from the store by the caller; without it every paid lead is reported Unmatched (no campaign data)."""
+    from app.leads.services.attribution import attribute, summary
+    from app.leads.services.spend_service import build_facts
     inp = I.load(inbox, sales_files)
     if inp.retailers is None or inp.retailer_month is None:
         raise ValueError("The BO Dashboard sales outputs (network/retailers.csv and retailer_month.csv) are missing: "
@@ -110,7 +156,11 @@ def run(inbox: Dict[str, bytes], sales_files: Dict[str, bytes], target_overrides
     sales = prepare_sales(inp, log)
     leads = prepare_leads(inp, log, today)
     if len(leads):
-        leads = classify(match(leads, sales), sales)
+        leads = classify(match(leads, sales, reviews), sales)
+    ads = ads or {}
+    delivery = ads.get("delivery") or {}
+    if len(leads):
+        leads = attribute(leads, delivery)
     spend = prepare_spend(inp, log)
     follow = prepare_followup(inp, log)
     found = prepare_targets(inp, log)
@@ -120,6 +170,10 @@ def run(inbox: Dict[str, bytes], sales_files: Dict[str, bytes], target_overrides
     steps = [{**asdict(s), "dropped": s.dropped} for s in log]
     payload = build_payload(sales, leads, spend, follow, targets, sorted(found), files, steps, gaps, ASSUMPTIONS)
     payload["targetsSet"] = sorted(target_overrides or {})
+    payload["attribution"] = summary(leads, delivery) if len(leads) else None
+    payload["matchReview"] = _review_queue(leads, sales) if len(leads) else []
+    payload["adDaily"] = _ad_daily(delivery)
+    facts = build_facts(leads, sales, ads.get("budget") or {}, delivery) if len(leads) else None
 
     sh = M.sales_headlines(sales)
     lh = M.lead_headlines(leads, sales) if len(leads) else None
@@ -170,4 +224,4 @@ def run(inbox: Dict[str, bytes], sales_files: Dict[str, bytes], target_overrides
         "Data gaps": pd.DataFrame({"#": range(1, len(gaps) + 1), "Gap": gaps}),
     })
     memo = write_memo(sh, lh, gaps, payload, today or date.today(), fh)
-    return Result(payload, recon, memo)
+    return Result(payload, recon, memo, facts)

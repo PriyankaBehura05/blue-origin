@@ -4,7 +4,7 @@ import { api } from '@/services';
 import { useAsync } from '@/hooks/useAsync';
 import { setTheme, useTheme } from '@/hooks/useTheme';
 import { NETWORK_PAGES } from '@/pages/NetworkPage';
-import { LEADS_BASE, LEADS_PAGES } from '@/leads';
+import { LEADS_BASE, LEADS_PAGES, leadsNavRoot } from '@/leads';
 import type { HealthStatus } from '@/types';
 import { clearSession, updateUser, useSession } from '@/services/session';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -160,7 +160,8 @@ export function Layout() {
             <div className="nav-h">Lead Generation</div>
             {LEADS_PAGES.map((p) => (
               <HelpTip key={p.id} text={p.soWhat} side="right" block>
-                <NavLink to={`${LEADS_BASE}/${p.id}`} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
+                <NavLink to={`${LEADS_BASE}/${p.id}`} onClick={() => setOpen(false)}
+                  className={({ isActive }) => `nav-link ${isActive || leadsNavRoot(pathname.slice(LEADS_BASE.length + 1).split('/')[0]) === p.id ? 'active' : ''}`}>
                   <span className="nav-icon"><p.icon size={16} strokeWidth={1.75} aria-hidden style={{ verticalAlign: '-3px' }} /></span>
                   {p.title}
                 </NavLink>

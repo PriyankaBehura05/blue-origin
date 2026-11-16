@@ -1,14 +1,14 @@
 // Lead Generation API calls (/api/leads/...). Uses the shared sign-in token; nothing from the BO Dashboard.
 import { clearSession, getToken } from '@/services/session';
-import type { ActionItem, LeadsPayload, LeadsStatus, SheetSource, SheetsStatus } from './types';
+import type { ActionItem, AdDetail, BudgetPayload, CampaignPerformance, LeadsPayload, LeadsStatus, MatchReview, SheetSource, SheetsStatus } from './types';
 
 const BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api').replace(/\/$/, '');
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, prefix = '/leads'): Promise<T> {
   const t = getToken();
   let res: Response;
   try {
-    res = await fetch(`${BASE}/leads${path}`, {
+    res = await fetch(`${BASE}${prefix}${path}`, {
       method,
       headers: {
         ...(t ? { Authorization: `Bearer ${t}` } : {}),
@@ -65,4 +65,15 @@ export const leadsApi = {
   saveSheets: (items: SheetSource[]) => call<SheetsStatus>('PUT', '/sheets', { items }),
   refreshSheets: () => call<SheetsStatus>('POST', '/sheets/refresh'),
   saveTargets: (t: Record<string, number>) => call<Record<string, number>>('PUT', '/targets', t),
+  campaignPerformance: (q: { start: string; end: string; level: string; window: number }) =>
+    call<CampaignPerformance>('GET', `/campaign-performance?${new URLSearchParams({ ...q, window: String(q.window) })}`),
+  saveMatchReview: (r: Pick<MatchReview, 'mobile' | 'retailer_id'> & { decision: 'approve' | 'reject' | 'clear' }) =>
+    call<unknown>('PUT', '/match-reviews', r),
+};
+
+// Ad budget screen. Reading returns what the last fetch saved (it never calls Google or Meta); refreshing is admin only.
+export const adsApi = {
+  budget: () => call<BudgetPayload>('GET', '/budget', undefined, '/ads'),
+  detail: () => call<AdDetail>('GET', '/budget/detail', undefined, '/ads'),
+  refreshBudget: (platforms: string[]) => call<{ started: string[] }>('POST', '/budget/refresh', { platforms }, '/ads'),
 };

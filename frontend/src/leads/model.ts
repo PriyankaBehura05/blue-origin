@@ -12,9 +12,9 @@ export const PENDING = 5; // too recent to judge: its window runs past the last 
 export const isOpen = (o: number) => o === NOT_CONVERTED || o === PENDING;
 export const ORGANIC = 5; // source filter value / acquisition source for retailers no lead brought in
 
-export type FilterKey = 'period' | 'source' | 'campaign' | 'state' | 'city' | 'dist' | 'tier' | 'outcome' | 'level' | 'window';
+export type FilterKey = 'period' | 'source' | 'campaign' | 'state' | 'city' | 'dist' | 'tier' | 'outcome' | 'level' | 'window' | 'stage' | 'rwin';
 export interface Filters {
-  period: string; // 'all' | 'q:Q2_FY27' | 'm:<month index>'
+  period: string; // 'all' | 'q:Q2_FY27' | 'm:<month index>' | 'r:<from month>:<to month>' (custom range)
   source: number; // -1 all, 0..4 lead source, 5 Organic
   campaign: number;
   state: number;
@@ -24,10 +24,12 @@ export interface Filters {
   outcome: number;
   level: number; // 0 floor, 1 likely, 2 ceiling
   window: number; // 30 | 60 | 90
+  stage: number; // purchase stage (repeat.ts STAGES): -1 all, 0 none yet, 1 first only, 2 exactly 2, 3 three or more, 4 repeat (2+)
+  rwin: number; // repeat observation window in months: 3 | 6 | 12
 }
 export const FILTER_LABELS: Record<FilterKey, string> = {
   period: 'Period', source: 'Source', campaign: 'Campaign', state: 'State', city: 'City', dist: 'Distributor',
-  tier: 'Tier', outcome: 'What happened', level: 'Matching', window: 'Sale within',
+  tier: 'Tier', outcome: 'What happened', level: 'Matching', window: 'Sale within', stage: 'Purchase stage', rwin: 'Repeat within',
 };
 /** How sure a lead-to-retailer match must be: floor / likely / ceiling in the pipeline. */
 export const LEVEL_NAMES = ['Strict', 'Normal', 'Loose'];
@@ -37,7 +39,7 @@ export const LEVEL_HELP = [
   'Loose: also shop names that are only similar',
 ];
 // filters that always have a value (not "active" in the sense of narrowing the data)
-export const ALWAYS_ON: FilterKey[] = ['period', 'level', 'window'];
+export const ALWAYS_ON: FilterKey[] = ['period', 'level', 'window', 'rwin'];
 
 export interface Model {
   p: LeadsPayload;
@@ -91,7 +93,7 @@ export function buildModel(p: LeadsPayload): Model {
 }
 
 export const defaultFilters = (M: Model): Filters => ({
-  period: `q:${M.latestQuarter}`, source: -1, campaign: -1, state: -1, city: -1, dist: -1, tier: -1, outcome: -1, level: 1, window: 60,
+  period: `q:${M.latestQuarter}`, source: -1, campaign: -1, state: -1, city: -1, dist: -1, tier: -1, outcome: -1, level: 1, window: 60, stage: -1, rwin: 3,
 });
 
 export function activeFilters(f: Filters): FilterKey[] {
@@ -109,6 +111,10 @@ export function rangeOf(M: Model, period: string): Range {
   if (period.startsWith('m:')) {
     const i = Number(period.slice(2));
     return [i, i];
+  }
+  if (period.startsWith('r:')) {
+    const [a, b] = period.slice(2).split(':').map(Number);
+    if (Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b < M.nM) return [Math.min(a, b), Math.max(a, b)];
   }
   return [M.leadStart, M.leadEnd]; // all periods = every month with leads
 }
@@ -138,6 +144,11 @@ export function prevPeriod(M: Model, period: string): string | null {
     const i = Number(period.slice(2));
     return i > 0 ? `m:${i - 1}` : null;
   }
+  if (period.startsWith('r:')) {   // the same number of months just before
+    const [a, b] = rangeOf(M, period);
+    const n = b - a + 1;
+    return a - n >= 0 ? `r:${a - n}:${a - 1}` : null;
+  }
   return null;
 }
 
@@ -159,6 +170,10 @@ export const quarterShort = (q: string) => q.replace(/^Q(\d)_FY(\d+)$/, 'Q$1 FY$
 export function periodName(M: Model, period: string): string {
   if (period.startsWith('q:')) return quarterName(period.slice(2));
   if (period.startsWith('m:')) return monthName(M, Number(period.slice(2)));
+  if (period.startsWith('r:')) {
+    const [a, b] = rangeOf(M, period);
+    return a === b ? monthName(M, a) : `${monthName(M, a)} – ${monthName(M, b)}`;
+  }
   return `All periods (${monthName(M, M.leadStart)} – ${monthName(M, M.leadEnd)})`;
 }
 
@@ -260,7 +275,8 @@ export function leadOk(M: Model, f: Filters, i: number, rg: Range | null, skip: 
   if (f.state >= 0 && !skip.includes('state') && (L.s[i] >= 0 ? L.s[i] : r >= 0 ? R.s[r] : -1) !== f.state) return false;
   if (f.city >= 0 && !skip.includes('city') && (L.c[i] >= 0 ? L.c[i] : r >= 0 ? R.c[r] : -1) !== f.city) return false;
   if (f.dist >= 0 && !skip.includes('dist') && leadDist(M, i, r) !== f.dist) return false;
-  if (f.tier >= 0 && !skip.includes('tier') && (r < 0 || tierAt(M, r, rg ? rg[1] : M.p.salesEnd) !== f.tier)) return false;
+  // tier at the end of the period, or at the last sales month when the period runs past it (later quarters have no tiers yet)
+  if (f.tier >= 0 && !skip.includes('tier') && (r < 0 || tierAt(M, r, rg ? Math.min(rg[1], M.p.salesEnd) : M.p.salesEnd) !== f.tier)) return false;
   if (f.outcome >= 0 && !skip.includes('outcome') && outcomeOf(M, i, f.level, f.window) !== f.outcome) return false;
   return true;
 }
@@ -310,6 +326,45 @@ export function leadAgg(M: Model, f: Filters, rg: Range | null, pick?: (i: numbe
     if (o === NEW && billedMonths(M, ret[i]) >= 2) a.repeatRetailers++;
   }
   return a;
+}
+
+/** Retailer-level counts behind the six cover KPIs. Read-only: it reuses the filters, the matching level and the outcomes
+ *  as they are and changes nothing about them.
+ *  prospects  = unique leads, where leads whose mobile exactly matches the same BO retailer (main or alternate number) count once;
+ *               fuzzy name matches are never merged, and a lead without a working number stays one prospect.
+ *  converted  = distinct BO retailers reached by a lead that is a New retailer or Came back; a retailer reached both ways counts as new. */
+export interface RetailerCounts {
+  prospects: number;
+  merged: number;
+  converted: number;
+  fresh: number;
+  reactivated: number;
+  pending: number; // valid unique leads whose sales are not in yet: they may still convert
+}
+
+export function retailerCounts(M: Model, f: Filters, rg: Range | null, pick?: (i: number) => boolean): RetailerCounts {
+  const L = M.p.leads;
+  const ret = M.ret[f.level];
+  const exact = new Set<number>();
+  const won = new Map<number, number>(); // retailer -> NEW or REACTIVATED
+  let unique = 0;
+  let merged = 0;
+  let pending = 0;
+  for (let i = 0; i < M.nL; i++) {
+    if (!L.uniq[i] || !leadOk(M, f, i, rg) || (pick && !pick(i))) continue;
+    unique++;
+    const r = ret[i];
+    if (r >= 0 && (L.pass[i] === 1 || L.pass[i] === 2)) {
+      if (exact.has(r)) merged++;
+      else exact.add(r);
+    }
+    const o = outcomeOf(M, i, f.level, f.window);
+    if (L.valid[i] && o === PENDING) pending++;
+    if (r >= 0 && (o === NEW || o === REACTIVATED) && won.get(r) !== NEW) won.set(r, o);
+  }
+  let fresh = 0;
+  for (const v of won.values()) if (v === NEW) fresh++;
+  return { prospects: unique - merged, merged, converted: won.size, fresh, reactivated: won.size - fresh, pending };
 }
 
 export function billedMonths(M: Model, r: number): number {

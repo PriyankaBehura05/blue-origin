@@ -141,6 +141,7 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
             "pin": get("pincode").loc[df.index].map(N.pincode),
             "source": [N.source(v, t.file) for v in get("source").loc[df.index]],
             "campaign": get("campaign").loc[df.index].str.strip().replace("", "(no campaign)"),
+            "sheet_campaign_id": get("campaign_id").loc[df.index].fillna("").str.strip(),
             "adset": get("adset").loc[df.index].str.strip().replace("", "(no ad set)"),
             # follow-up kept on the lead sheet (ASM NAME, Calling Done, Visit Done, Order Placed, Order Value, ...)
             "f_owner": get("owner").loc[df.index].fillna("").str.strip().str.title(),
@@ -166,7 +167,7 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
         parts.append(part)
     if not parts:
         return pd.DataFrame(columns=["file", "date", "mobile", "alt", "name", "city_name", "city_key", "state", "pin",
-                                     "source", "campaign", "adset", "valid", "unique", "f_owner", "f_called", "f_visited", "f_order", "f_value", "f_cat", "f_self", "f_tracked"])
+                                     "source", "campaign", "sheet_campaign_id", "lead_id", "adset", "valid", "unique", "f_owner", "f_called", "f_visited", "f_order", "f_value", "f_cat", "f_self", "f_tracked"])
     leads = pd.concat(parts, ignore_index=True)
     leads["mobile"] = leads["mobile_raw"].map(N.mobile)
     fixed = int(leads["mobile_raw"].map(N.mobile_repaired).sum())
@@ -225,7 +226,7 @@ def prepare_leads(inp: Inputs, log: List[Step], today: Optional[date] = None) ->
         log.append(Step("all lead files", "copies of the same lead in another tab counted once", n, len(leads),
                         "same lead id and mobile in two tabs (e.g. a state-wise extract); the platform tab's row is kept with its "
                         "source, and the copy's ASM follow-up is merged into it"))
-    return leads.drop(columns=["mobile_raw", "alt_raw", "copy", "lead_id"])
+    return leads.drop(columns=["mobile_raw", "alt_raw", "copy"])
 
 
 def _first_filled(df: pd.DataFrame, columns: List[str]) -> pd.Series:

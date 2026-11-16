@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.router import api_router
+from app.ads import budget as ads_budget
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.leads.services import leads_service
@@ -26,7 +27,10 @@ async def lifespan(_: FastAPI):
     scheduler.start(get_repository, settings)
     # Lead Generation dashboard: re-read its linked Google Sheets (LEADS_SHEETS_MINUTES, 0 = off)
     leads_service.start_auto(get_repository, settings)
+    # Ad budget (Meta / Google spend and budgets): re-fetched in the background (ADS_REFRESH_MINUTES, 0 = off)
+    ads_budget.start_auto(get_repository, settings)
     yield
+    ads_budget.stop_auto()
     leads_service.stop_auto()
     scheduler.stop()
 

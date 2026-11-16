@@ -1,6 +1,6 @@
 # Lead Generation Dashboard (frontend)
 
-12 pages, one per section (`/leads/<section>`), opened from the icon menu in the sidebar like the BO Dashboard, with a
+15 pages, one per section (`/leads/<section>`), opened from the icon menu in the sidebar like the BO Dashboard, with a
 sticky global filter bar. Data loads once and stays while moving between pages, so filters and unsaved actions carry
 over. No tabs inside pages: alternate views are icon toggles or dropdowns inside a card.
 
